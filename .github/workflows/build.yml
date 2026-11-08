@@ -107,7 +107,15 @@ jobs:
         run: ./.github/scripts/preview.ps1 -Exe app/Phemio.exe -Out previews
       - name: Fonts on this runner
         shell: pwsh
-        run: Get-ChildItem C:\Windows\Fonts -Filter "Segoe*" | Select-Object -ExpandProperty Name
+        run: Get-ChildItem C:\Windows\Fonts -Filter "Seg*" | Select-Object -ExpandProperty Name
+      - name: Previews into the log (base64 zip, for tools that can read logs but not artifacts)
+        shell: pwsh
+        run: |
+          Compress-Archive -Path previews/* -DestinationPath previews.zip -Force
+          $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes("previews.zip"))
+          Write-Output "=====PREVIEWS-BEGIN====="
+          for ($i = 0; $i -lt $b.Length; $i += 3000) { Write-Output ("P:" + $b.Substring($i, [Math]::Min(3000, $b.Length - $i))) }
+          Write-Output "=====PREVIEWS-END====="
       - uses: actions/upload-artifact@v4
         with:
           name: previews
