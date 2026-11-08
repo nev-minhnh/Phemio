@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16181c"/>
+      <stop offset="0.5" stop-color="#0b0c0f"/>
+      <stop offset="1" stop-color="#08090b"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#43474e"/>
+      <stop offset="0.35" stop-color="#26292e"/>
+      <stop offset="1" stop-color="#121417"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ff0ff"/>
+      <stop offset="0.45" stop-color="#22c8ff"/>
+      <stop offset="1" stop-color="#1a9bff"/>
+    </linearGradient>
+    <linearGradient id="bell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7ff5ff"/>
+      <stop offset="1" stop-color="#18a8ff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.2" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="b2"/>
+      <feComponentTransfer in="b2" result="b2s"><feFuncA type="linear" slope="0.75"/></feComponentTransfer>
+      <feMerge><feMergeNode in="b2s"/><feMergeNode in="b1"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="sq"><rect x="0" y="0" width="100" height="100" rx="23"/></clipPath>
+  </defs>
+  <rect x="0" y="0" width="100" height="100" rx="23" fill="url(#rim)"/>
+  <rect x="0.7" y="0.9" width="98.6" height="98.4" rx="22.3" fill="url(#bg)"/>
+  <g clip-path="url(#sq)"><g filter="url(#glow)"><g transform="translate(53 50) scale(1.22) translate(-53 -50)">
+    <g id="art" fill="none" stroke="url(#neon)" stroke-width="4.3" stroke-linecap="round" stroke-linejoin="round">
+      <!-- tube: from bell neck down, U-bend, up into the pill -->
+      <path d="M33.6 29 V78.2 A4.6 4.6 0 0 0 42.8 78.2 V41.6"/>
+      <!-- pill outline -->
+      <rect x="41.2" y="23.4" width="44.6" height="21" rx="10.5" fill="#020306"/>
+      <path d="M33.6 31 V78.2 A4.6 4.6 0 0 0 42.8 78.2 V43" stroke="none"/>
+      <rect x="41.2" y="23.4" width="44.6" height="21" rx="10.5" stroke="none" fill="none"/>
+      <!-- valves -->
+      <path d="M24.6 46.2 H35.2 M24.6 52.4 H35.2 M24.6 58.6 H35.2" stroke-width="2.8"/>
+    </g>
+    <g fill="url(#neon)">
+      <!-- valve caps -->
+      <rect x="21.2" y="43.7" width="4" height="5" rx="2"/>
+      <rect x="21.2" y="49.9" width="4" height="5" rx="2"/>
+      <rect x="21.2" y="56.1" width="4" height="5" rx="2"/>
+      <!-- bell: wide rim on top, curving down to the neck -->
+      <path d="M21.8 12.2 H45.2 Q45.4 13.6 44.2 13.9 C38.6 15.2 35.8 21.5 35.3 30.5 H31.9 C31.4 21.5 28.6 15.2 23 13.9 Q21.6 13.6 21.8 12.2 Z" fill="url(#bell)"/>
+      <!-- foot under the bend -->
+      <path d="M36.2 82.4 Q35.4 86.4 31.6 87.2 H45.0 Q41.2 86.4 40.4 82.4 Z" transform="translate(-0.1 0)"/>
+      <!-- pill dots -->
+      <circle cx="72.6" cy="33.9" r="1.55"/>
+      <circle cx="76.8" cy="33.9" r="1.55"/>
+    </g>
+  </g></g></g>
+</svg>

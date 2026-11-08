@@ -1,0 +1,9 @@
+/target/
+/mglass/target/
+/dist/
+*.bgra
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

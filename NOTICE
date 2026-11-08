@@ -1,0 +1,14 @@
+Phemio – Your desktop cameo
+Copyright 2026 Minh Nguyen
+
+This product is dual-licensed under the Apache License, Version 2.0
+(LICENSE-APACHE) and the MIT license (LICENSE-MIT), at your option.
+
+The transparency helper (mglass/) is Phemio's own Rust code. The way it
+reaches the XAML of the taskbar and File Explorer follows the approach
+described by TranslucentTB (https://github.com/TranslucentTB/TranslucentTB)
+and the Windhawk "Windows 11 File Explorer Styler" mod; neither project's
+source code is included here.
+
+Third-party Rust crates used by Phemio are listed in Cargo.lock and
+mglass/Cargo.lock, each under its own license.

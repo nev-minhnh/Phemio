@@ -1,0 +1,105 @@
+[package]
+name = "phemio"
+version = "0.37.0"
+edition = "2021"
+description = "Phemio – Your desktop cameo. A Dynamic Island for Windows 11."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+windows-core = "0.62"
+windows-numerics = "0.3"
+serde_json = "1"
+windows-collections = "0.3"
+qrcode = { version = "0.14", default-features = false }
+rqrr = { version = "0.11", default-features = false }
+webview2-com = "0.39"
+# Link (one mouse & keyboard across PCs): pairing and encryption.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+aes-gcm = "0.10"
+sha2 = "0.10"
+getrandom = "0.2"
+# Content search: Phemio's own index of what's inside your files.
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+pdf-extract = "0.7"
+
+[dependencies.windows]
+version = "0.62.2"
+features = [
+  "std",
+  "Foundation",
+  "Media_Control",
+  "Media_Ocr",
+  "Graphics_Imaging",
+  "Globalization",
+  "Devices_Enumeration",
+  "Devices_Bluetooth",
+  "Devices_Radios",
+  "Devices_Geolocation",
+  "Foundation_Collections",
+  "Storage_Streams",
+  "Win32_Foundation",
+  "Win32_Devices_Display",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Direct2D",
+  "Win32_Graphics_Direct2D_Common",
+  "Win32_Graphics_DirectWrite",
+  "Win32_Graphics_Imaging",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_Media_KernelStreaming",
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
+  "Win32_Storage_IndexServer",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Power",
+  "Win32_System_Shutdown",
+  "Win32_Security_Credentials",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Registry",
+  "Win32_System_IO",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_Time",
+  "Win32_Globalization",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Controls",
+  "Win32_UI_Controls_Dialogs",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_Networking_WinHttp",
+  "Win32_Networking_WinSock",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_NetworkManagement_WiFi",
+  "Win32_Networking_NetworkListManager",
+  "Win32_System_Performance",
+  "Wdk_Graphics_Direct3D",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_System_Wmi",
+  "Win32_System_Ole",
+  "Win32_System_SystemServices",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_Devices_Properties",
+  "Win32_Media_Multimedia",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"
+strip = true
