@@ -75,6 +75,15 @@ jobs:
           path: dist/Phemio-${{ steps.pkg.outputs.version }}-source.zip
           compression-level: 0
 
+      - name: Zips into the log (base64, for tools that can read logs but not artifacts)
+        if: github.event_name != 'pull_request'
+        run: |
+          for f in dist/Phemio-*.zip; do
+            echo "=====FILE-BEGIN $(basename "$f") $(sha256sum "$f" | cut -d' ' -f1)====="
+            base64 -w 3000 "$f" | sed 's/^/F:/'
+            echo "=====FILE-END====="
+          done
+
       - name: Upload the exe (for the preview job)
         uses: actions/upload-artifact@v4
         with:
