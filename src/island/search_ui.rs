@@ -650,17 +650,24 @@ impl Island {
             if self.hot == Some(Hit::SrchGuide(i)) {
                 self.surf.fill_rr(r, 9.0, self.fg(0.07 * ra));
             }
-            let bs = (rh - 10.0).min(24.0);
-            let br = rf(r.left + 8.0, r.top + (rh - 2.0 - bs) / 2.0, bs, bs);
+            // The badge sits on the row's middle line, as the text does (on the
+            // page the rows are short: the badge keeps a readable size and is
+            // only as wide as its letters need).
+            let bs = (rh - 6.0).clamp(14.0, 24.0);
+            let cy = r.top + (rh - 2.0) / 2.0;
+            let icon = badge.chars().next().map(|ch| ('\u{E000}'..='\u{F8FF}').contains(&ch)).unwrap_or(false);
+            let slot = bs.max(22.0);
+            let bw = if icon || badge == "AI" { bs } else { bs.max(gfx::g().measure(badge, &self.f.tiny_c) + 6.0).min(slot) };
+            let br = rf(r.left + 8.0 + (slot - bw) / 2.0, cy - bs / 2.0, bw, bs);
             let c = self.ic(col, 1.0);
             if badge == "AI" {
                 self.gemini_tile(br, ra);
             } else {
                 self.surf.fill_rr(br, bs * 0.28, with_alpha(c, 0.9 * ra));
-                let icon = badge.chars().next().map(|ch| ('\u{E000}'..='\u{F8FF}').contains(&ch)).unwrap_or(false);
                 self.surf.text(badge, if icon { &self.f.icon_s } else { &self.f.tiny_c }, br, Island::text_on(c, ra));
             }
-            let tx = br.right + 10.0;
+            // Titles line up whatever the badge's width.
+            let tx = r.left + 8.0 + slot + 9.0;
             let g = gfx::g();
             let title = tr(title);
             let tw = g.measure(title, &self.f.body) + 12.0;
