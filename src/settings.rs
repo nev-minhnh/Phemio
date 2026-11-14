@@ -109,6 +109,7 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
             v.push(row("Search with Alt+S", "Apps right away; files and folders through Everything (voidtools)", Ctl::Toggle("search_hotkey"), true));
             v.push(row("Search as you type", "Off: type, then press Enter to search", Ctl::Toggle("search_live"), true));
             v.push(row("Link with your other PCs", "One mouse and keyboard across PCs running Phemio (Island → Link page to pair and arrange screens)", Ctl::Toggle("link_on"), true));
+            v.push(row("Play sound from linked PCs", "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)", Ctl::Toggle("link_audio_in"), c.b("link_on")));
             if c.b("link_on") {
                 use crate::link::firewall::{busy, state, Fw};
                 let (sub, need) = match state() {
@@ -303,7 +304,7 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
         }
         _ => {
             let (pws, ws, private) = util::memory_mb();
-            v.push(row("Phemio 0.37.0", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
+            v.push(row("Phemio 0.38.0", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
             v.push(row("Source code", "github.com/nev-minhnh/Phemio · MIT or Apache-2.0", Ctl::Button("Open", Act::Url("https://github.com/nev-minhnh/Phemio")), true));
             let detail = format!("{} · {} {ws:.0} MB · {} {private:.0} MB", tr("Same as Task Manager"), tr("working set"), tr("committed"));
             v.push(row("Memory in use", &detail, Ctl::Text(format!("{pws:.1} MB")), true));

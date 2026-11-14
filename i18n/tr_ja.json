@@ -859,7 +859,6 @@
  "Their file names, e.g. notepad.exe, regedit.exe, mmc.exe (Task Manager → Details shows them)": "ファイル名（例：notepad.exe、regedit.exe、mmc.exe。タスク マネージャー → 詳細で確認できます）",
  "What the transparency helper did inside Explorer and the apps — useful when something doesn't work": "透明化ヘルパーがエクスプローラーとアプリ内で行ったこと — うまくいかないときに役立ちます",
  "Add the apps below first": "先に下でアプリを追加してください",
- "Phemio 0.37.0": "Phemio 0.37.0",
  "Allow": "許可",
  "Asking Windows…": "Windows に確認中…",
  "Windows Firewall is slowing down finding other PCs": "Windows ファイアウォールが他の PC の検出を遅くしています",
@@ -871,5 +870,13 @@
  "Source code": "ソースコード",
  "Your desktop cameo": "Your desktop cameo",
  "github.com/nev-minhnh/Phemio · MIT or Apache-2.0": "github.com/nev-minhnh/Phemio · MIT または Apache-2.0",
- "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · Windows 11 のダイナミックアイランド、ネイティブ Rust + Direct2D"
+ "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · Windows 11 のダイナミックアイランド、ネイティブ Rust + Direct2D",
+ "Phemio 0.38.0": "Phemio 0.38.0",
+ "Play sound from linked PCs": "リンクした PC の音を再生",
+ "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)": "リンクした PC がこの PC のスピーカーを使えます（その PC で：デバイス → サウンド出力 → 複数で再生、この PC にチェック）",
+ "Playing on the linked PC": "リンクした PC で再生中",
+ "Connecting to the linked PC…": "リンクした PC に接続中…",
+ "The other PC is playing its sound here": "もう一方の PC がここで音を再生しています",
+ "Not linked": "リンクされていません",
+ "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "もう一方の PC が音を受け取りませんでした（Phemio 0.38 以降で「リンクした PC の音を再生」をオンにしてください）"
 }

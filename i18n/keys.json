@@ -350,7 +350,7 @@
   "Lunar calendar",
   "Main",
   "Make main",
-  "Phemio 0.37.0",
+  "Phemio 0.38.0",
   "Mascot",
   "Mascot look",
   "Measuring the delay…",
@@ -844,7 +844,14 @@
   "Source code",
   "Your desktop cameo",
   "github.com/nev-minhnh/Phemio · MIT or Apache-2.0",
-  "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D"
+  "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D",
+  "Play sound from linked PCs",
+  "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)",
+  "Playing on the linked PC",
+  "Connecting to the linked PC…",
+  "The other PC is playing its sound here",
+  "Not linked",
+  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)"
  ],
  "vi": {
   "\"100 usd\" in the search converts to this": "Gõ \"100 usd\" vào ô tìm kiếm để quy đổi sang loại tiền này",
@@ -1555,6 +1562,6 @@
   "↵ copy the answer   ·   scroll to read   ·   ←→ edit   ·   Esc close": "↵ sao chép câu trả lời   ·   cuộn để đọc   ·   ←→ sửa   ·   Esc đóng",
   "↵ open   ·   Ctrl+↵ copy link   ·   ↑↓ choose   ·   ←→ edit   ·   Esc close": "↵ mở   ·   Ctrl+↵ sao chép liên kết   ·   ↑↓ chọn   ·   ←→ sửa   ·   Esc đóng",
   "↵ open   ·   Ctrl+↵ show in folder   ·   ↑↓ choose   ·   ←→ edit   ·   Esc close": "↵ mở   ·   Ctrl+↵ mở thư mục chứa   ·   ↑↓ chọn   ·   ←→ sửa   ·   Esc đóng",
-  "Phemio 0.37.0": "Phemio 0.37.0"
+  "Phemio 0.38.0": "Phemio 0.38.0"
  }
 }

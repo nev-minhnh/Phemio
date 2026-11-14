@@ -7,6 +7,7 @@
 //! shared map (Island → Link page); see `geom` for how crossings work,
 //! `proto` for what's said, `input` for the Windows hooks.
 
+pub mod audio;
 pub mod clip;
 pub mod firewall;
 pub mod geom;
@@ -1282,6 +1283,13 @@ fn listen(gen: u64) {
                                 if let Err(e) = clip::receive(s, tx, rx) {
                                     crate::util::log(&format!("link: receiving files: {e}"));
                                     set_xfer_done(format!("{}: {e}", crate::i18n::tr("Transfer failed")));
+                                }
+                            }
+                        } else if purpose == proto::FOR_AUDIO {
+                            // Sound only from the PC we're linked with.
+                            if with(|x| x.session.as_ref().map(|y| y.id == pid)).flatten().unwrap_or(false) {
+                                if let Err(e) = audio::receive(s, tx, rx, pid) {
+                                    crate::util::log(&format!("link: sound from the other PC: {e}"));
                                 }
                             }
                         } else {

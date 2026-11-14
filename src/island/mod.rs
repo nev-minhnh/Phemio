@@ -2713,7 +2713,7 @@ impl Island {
         }
         self.in_list = crate::audio::list_inputs();
         if self.out_menu {
-            self.out_list = crate::audio::list_outputs();
+            self.out_list = crate::multiout::outputs();
         }
     }
 
@@ -4855,7 +4855,7 @@ impl Island {
                     self.in_mode = want_in;
                 }
                 if self.out_menu {
-                    self.out_list = crate::audio::list_outputs();
+                    self.out_list = crate::multiout::outputs();
                     self.in_list = crate::audio::list_inputs();
                 }
                 self.out_anim.set(if self.out_menu { 1.0 } else { 0.0 });
@@ -4876,7 +4876,7 @@ impl Island {
                     } else if !crate::audio::set_default_output(&o.id) {
                         util::log("couldn't switch the sound output");
                     }
-                    self.out_list = crate::audio::list_outputs();
+                    self.out_list = crate::multiout::outputs();
                 }
                 self.mo_refresh();
                 self.render();

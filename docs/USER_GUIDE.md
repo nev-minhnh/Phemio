@@ -144,6 +144,24 @@ to install) and plays a copy on each ticked device. Off = nothing recorded, no C
   connected; a speaker that disconnects leaves the card. The volume popup shows a row for each.
 - When two outputs share a name (two "Realtek(R) Audio"), the endpoint's own name is shown instead
   ("Speakers", "Headphones").
+- **The linked PC's speakers (Link).** While two PCs are linked and Play on several is on, the other PC is one
+  more row in the list — "*its name* · Link", with a PC icon. Tick it and what this PC plays also comes out of
+  the other PC's default output; a line under it says *Playing on the linked PC* (or what went wrong). It has
+  the same panel as any speaker: **volume** (applied to this sound on the other PC — that PC's own volume is
+  the ceiling), **delay**, **Auto-sync** and **Calibrate** (the microphone here has to hear the other PC's
+  speakers). It joins the group volume and the volume keys too.
+  - **Only on the other PC:** make the main output here one you aren't listening to (a monitor without
+    speakers, a digital output with nothing plugged in) or turn that device down.
+  - **Lining up:** the sound crosses the network and waits a moment over there (about 50 ms, so that late
+    packets and the two PCs' slightly different clocks never show), so it is always the last to play: the
+    other ticked speakers here can be delayed to match it; the main output can't. In different rooms none of
+    this matters.
+  - It is the sound as it is — not compressed — sealed like everything else in Link, on a connection of its
+    own (a few megabits on the local network; next to nothing while nothing plays). The other PC keeps the
+    amount waiting steady by leaving out or repeating one sample frame in a few thousand, which can't be heard.
+  - One way at a time: a PC that is playing the other's sound doesn't send its own back.
+  - The other PC needs Phemio 0.38 or newer, with **Settings → General → Play sound from linked PCs** on (it
+    is by default; turn it off there if that PC's speakers shouldn't be used).
 - Clocks drift a little over time; Phemio keeps each copy at its delay by trimming a few milliseconds now
   and then. Everything the PC plays is copied (notification sounds too).
 

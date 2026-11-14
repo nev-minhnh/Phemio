@@ -4,8 +4,8 @@
 1 24 "phemio.manifest"
 
 1 VERSIONINFO
-FILEVERSION 0,37,0,0
-PRODUCTVERSION 0,37,0,0
+FILEVERSION 0,38,0,0
+PRODUCTVERSION 0,38,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -18,12 +18,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Minh Nguyen"
             VALUE "FileDescription", "Phemio - Your desktop cameo"
-            VALUE "FileVersion", "0.37.0"
+            VALUE "FileVersion", "0.38.0"
             VALUE "InternalName", "Phemio"
             VALUE "LegalCopyright", "Copyright (C) 2026 Minh Nguyen"
             VALUE "OriginalFilename", "Phemio.exe"
             VALUE "ProductName", "Phemio"
-            VALUE "ProductVersion", "0.37.0"
+            VALUE "ProductVersion", "0.38.0"
         END
     END
     BLOCK "VarFileInfo"

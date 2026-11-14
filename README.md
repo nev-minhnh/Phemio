@@ -31,7 +31,7 @@ zero CPU while nothing on it moves.
 - **Search (Alt+S).** Apps, files (through Everything), file contents (Phemio's own index),
   calculations, currency, translations and Gemini answers — right on the island.
 - **Link.** One mouse and keyboard across your PCs on the same network, with a shared clipboard and
-  file shelf. Paired, end-to-end encrypted, no cloud.
+  file shelf — and one PC's sound on the other's speakers. Paired, end-to-end encrypted, no cloud.
 - **Taskbar monitor.** CPU, GPU, memory, disk and network speeds on the taskbar.
 - **Transparency.** See-through taskbar and File Explorer backgrounds (clear or frosted), with one
   click to put Windows' own look back.
@@ -99,7 +99,8 @@ Environment variables that help testing (they keep their old `ISLET_` prefix):
 `ISLET_DUMP=<folder>` writes every frame as raw BGRA, `ISLET_OPEN_PAGE=<n>` opens the island on a
 page, `ISLET_OPEN_SETTINGS=<tab>` opens Settings, `ISLET_DEMO_ART=<image>` fakes a playing track,
 `ISLET_NET_MOCK=<folder>` serves web lookups from JSON files, `ISLET_FAKE_BATT=pct,charging,saver`
-fakes the battery, `ISLET_LINK_NOBEACON=1` tests Link as if broadcasts were blocked.
+fakes the battery, `ISLET_LINK_NOBEACON=1` tests Link as if broadcasts were blocked, `ISLET_AUDIO_LOG=1` logs how much
+sound is waiting on the PC that plays the linked PC's sound.
 
 ## Project layout
 
@@ -109,7 +110,7 @@ fakes the battery, `ISLET_LINK_NOBEACON=1` tests Link as if broadcasts were bloc
 | `src/island/` | The island window, its pages, search, Link page and the mascot |
 | `src/settings.rs` | The Settings window |
 | `src/gfx.rs` | Drawing (Direct2D, DirectWrite, WIC) and the logo |
-| `src/link/` | Link: discovery, pairing and encryption, input sharing, clipboard and shelf, firewall rule |
+| `src/link/` | Link: discovery, pairing and encryption, input sharing, clipboard and shelf, sound to the linked PC, firewall rule |
 | `src/tbmon/` | The taskbar monitor |
 | `src/glass.rs`, `mglass/` | Transparency: the app side and the helper that runs inside Explorer |
 | `src/media.rs`, `audio.rs`, `sysmon.rs`, `bt.rs`, `weather.rs`, `net.rs` | Now playing, sound, system state, Bluetooth, weather, HTTP |

@@ -542,6 +542,19 @@ impl Island {
         let sel = |i: usize| picked.as_deref() == Some(list[i].id.as_str());
         let ticked = |i: usize| mo && !list[i].default && tgts[i].on;
         let behind = |id: &str| st.behind.iter().find(|b| b.0 == id).map(|b| b.1);
+        // The linked PC's speakers (Link): can't be the main output; a line
+        // says how its copy is doing.
+        let remote = |i: usize| crate::link::audio::is_remote(&list[i].id);
+        let link_note: Option<(String, bool)> = {
+            use crate::link::audio as la;
+            match la::status() {
+                (la::PLAYING, _) => Some((tr("Playing on the linked PC").to_string(), false)),
+                (la::CONNECTING, _) => Some((tr("Connecting to the linked PC…").to_string(), false)),
+                (_, m) if !m.is_empty() => Some((m, true)),
+                _ if la::receiving() => Some((tr("The other PC is playing its sound here").to_string(), true)),
+                _ => None,
+            }
+        };
         // Lines under a row while its settings are open: volume; delay and the
         // buttons when it's playing along; "Make main" otherwise.
         let panel = |i: usize| -> f32 {
@@ -551,10 +564,13 @@ impl Island {
             let mut h = line;
             if ticked(i) {
                 h += line + 30.0;
-            } else if !list[i].default {
+            } else if !list[i].default && !remote(i) {
                 h += 30.0;
             }
             if behind(&list[i].id).is_some() {
+                h += 16.0;
+            }
+            if remote(i) && ticked(i) && link_note.is_some() {
                 h += 16.0;
             }
             h + 4.0
@@ -563,6 +579,10 @@ impl Island {
         let content = 24.0 + (0..list.len()).map(|i| rh + panel(i)).sum::<f32>() + footer;
         let off = self.dev_scrolled(content, view_h, x + w + 3.0, y, a * t);
         let mut yy = y + 24.0 - off;
+        // Scrolled rows go under the header, not over it (nor are they
+        // clickable there).
+        self.surf.clip(rf(x - 8.0, y + 20.0, w + 24.0, view_h + 60.0));
+        let hits_from = self.hits.len();
         for (i, o) in list.iter().enumerate() {
             // Rows arrive one after another.
             let ti = ((t * 1.35) - i as f32 * 0.09).clamp(0.0, 1.0);
@@ -581,6 +601,7 @@ impl Island {
                 self.surf.fill_rr(r, 8.0, self.fg(0.08 * a));
             }
             let glyph = match o.form {
+                crate::multiout::FORM_LINKED_PC => "\u{E977}",
                 3 | 4 => "\u{E7F6}",
                 9 => "\u{E7F4}",
                 _ => "\u{E7F5}",
@@ -677,9 +698,11 @@ impl Island {
                     ly += line;
                     // This speaker: line it up, or make it the main one — three
                     // equal buttons across.
-                    let bw3 = (lw_ - 12.0) / 3.0;
+                    // (The linked PC can't be the main output: two buttons.)
+                    let nb_ = if remote(i) { 2.0 } else { 3.0 };
+                    let bw3 = (lw_ - 6.0 * (nb_ - 1.0)) / nb_;
                     let busy = st.busy;
-                    for (k, (label, glyph, hit)) in [(tr("Auto-sync"), "\u{E895}", Hit::MoAutoOne(i)), (tr("Calibrate"), "\u{E720}", Hit::MoCalibOne(i)), (tr("Make main"), "\u{E7F5}", Hit::MoMain(i))].into_iter().enumerate() {
+                    for (k, (label, glyph, hit)) in [(tr("Auto-sync"), "\u{E895}", Hit::MoAutoOne(i)), (tr("Calibrate"), "\u{E720}", Hit::MoCalibOne(i)), (tr("Make main"), "\u{E7F5}", Hit::MoMain(i))].into_iter().take(nb_ as usize).enumerate() {
                         let br = rf(lx + k as f32 * (bw3 + 6.0), ly + 2.0, bw3, 24.0);
                         let hot = self.hot == Some(hit);
                         let on = busy && hit == Hit::MoCalibOne(i);
@@ -691,13 +714,18 @@ impl Island {
                         self.hits.push((hit, br));
                     }
                     ly += 30.0;
-                } else if !o.default {
+                } else if !o.default && !remote(i) {
                     btn(self, lx, ly + 2.0, tr("Make main"), "", Hit::MoMain(i), false);
                     ly += 30.0;
                 }
                 if let Some(ms) = behind(&o.id) {
                     let msg = format!("{} {ms} ms", tr("Slower than the main output by"));
                     self.surf.text(&ellip(g, &msg, &self.f.small, w - 12.0), &self.f.small, rf(lx, ly, w - 12.0, 14.0), self.ic(pal::ORANGE, a));
+                    ly += 16.0;
+                }
+                if let (true, Some((msg, bad))) = (remote(i) && ticked(i), &link_note) {
+                    let col = if *bad { rgb(pal::RED, a) } else { self.ic(pal::GREEN, a) };
+                    self.surf.text(&ellip(g, msg, &self.f.small, w - 12.0), &self.f.small, rf(lx, ly, w - 12.0, 14.0), col);
                 }
             }
             yy += rh + ph;
@@ -729,6 +757,18 @@ impl Island {
             self.surf.text(&ellip(g, &msg, &self.f.small, w), &self.f.small, rf(x + 2.0, by_ + 30.0, w, 14.0), col);
             if st.busy {
                 self.keep_anim = true;
+            }
+        }
+        self.surf.unclip();
+        let top = y + 20.0;
+        let mut k = hits_from;
+        while k < self.hits.len() {
+            let r = &mut self.hits[k].1;
+            if r.bottom <= top {
+                self.hits.remove(k);
+            } else {
+                r.top = r.top.max(top);
+                k += 1;
             }
         }
     }

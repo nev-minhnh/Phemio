@@ -16,6 +16,11 @@
 //!   is heard). The difference is the delay that lines it up.
 //! - The sliders set it by hand.
 //!
+//! **The linked PC's speakers** (Link) are one more row in the list while the
+//! two PCs are linked: its copy travels over the network (`link::audio`) and
+//! plays on that PC's default output. Its delay and volume are applied over
+//! there; it can't be the main output.
+//!
 //! The main output can't be delayed (apps play to it directly), so the copies
 //! are always a little later than it: a device that is slower than the main
 //! one (a Bluetooth speaker copied from built-in speakers) can't be lined up —
@@ -73,6 +78,34 @@ static HOST: AtomicU64 = AtomicU64::new(0);
 static HOST_MSG: AtomicU64 = AtomicU64::new(0);
 
 pub const MAX_DELAY: i32 = 800;
+
+use crate::link::audio::is_remote;
+
+/// The linked PC's row is muted (its volume stays where it was).
+static REMOTE_MUTE: AtomicBool = AtomicBool::new(false);
+/// The linked PC's volume was moved: saved once the slider rests.
+static VOL_MOVED: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// The outputs on the page: this PC's, and — while Play on several is on and
+/// the PCs are linked — the linked PC's speakers.
+pub fn outputs() -> Vec<crate::audio::Output> {
+    let mut v = crate::audio::list_outputs();
+    if config::cur().b("mo_on") {
+        if let Some((id, name)) = crate::link::audio::peer() {
+            v.push(crate::audio::Output { id, name: format!("{name} · Link"), form: FORM_LINKED_PC, default: false });
+        }
+    }
+    v
+}
+
+/// Developer aid (ISLET_MO_LINK=1): play on the linked PC without ticking its row.
+fn dev_link() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("ISLET_MO_LINK").is_ok())
+}
+
+/// `Output::form` of the linked PC's row (not one of Windows' form factors).
+pub const FORM_LINKED_PC: u32 = 1000;
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -178,7 +211,7 @@ pub fn init(host: HWND, msg: u32) {
 /// Start, restart or stop the copying to match the settings (call after the
 /// switch, the ticks or the main output change).
 pub fn apply() {
-    let on = config::cur().b("mo_on") && targets().iter().any(|t| t.on);
+    let on = config::cur().b("mo_on") && (targets().iter().any(|t| t.on) || dev_link());
     // The volume keys move all the speakers while they play together.
     crate::sysmon::VOL_KEYS.store(on && cluster().len() > 1, Ordering::Relaxed);
     let g = RUN.fetch_add(1, Ordering::AcqRel) + 1;
@@ -318,13 +351,16 @@ fn engine(g: u64) -> Result<()> {
             CoTaskMemFree(Some(p.0 as *const _));
             s
         };
-        let cap: IAudioClient = main.Activate(CLSCTX_ALL, None)?;
+        // (Developer aid, ISLET_MO_CAPTURE=1: record the default microphone
+        // instead — for systems without loopback recording, like Wine.)
+        let dev_cap = std::env::var("ISLET_MO_CAPTURE").is_ok();
+        let cap: IAudioClient = if dev_cap { en.GetDefaultAudioEndpoint(eCapture, eMultimedia)?.Activate(CLSCTX_ALL, None)? } else { main.Activate(CLSCTX_ALL, None)? };
         let fmt_g = Fmt(cap.GetMixFormat()?);
         let fmt = fmt_g.0;
         let rate = (*fmt).nSamplesPerSec as usize;
         let block = (*fmt).nBlockAlign as usize;
         // A full second of room, so a busy moment never loses sound.
-        cap.Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 10_000_000, 0, fmt, None)?;
+        cap.Initialize(AUDCLNT_SHAREMODE_SHARED, if dev_cap { 0 } else { AUDCLNT_STREAMFLAGS_LOOPBACK }, 10_000_000, 0, fmt, None)?;
         let cc: IAudioCaptureClient = cap.GetService()?;
         cap.Start()?;
         util::log(&format!("multi-out: copying {main_id} ({rate} Hz, {block} B/frame)"));
@@ -345,6 +381,9 @@ fn engine(g: u64) -> Result<()> {
         let ms = |m: i64| (m.max(0) as usize * rate) / 1000;
         let mut outs: Vec<Out> = Vec::new();
         let mut retry_at: Vec<(String, Instant)> = Vec::new();
+        // The copy that goes to the linked PC (if its row is ticked).
+        let mut remote: Option<Remote> = None;
+        let mut remote_tried = crate::util::ago(Duration::from_secs(10));
         let t0 = Instant::now();
         let mut captured: u64 = 0;
         let mut last_sync = crate::util::ago(Duration::from_secs(10));
@@ -354,7 +393,58 @@ fn engine(g: u64) -> Result<()> {
             // ---- Keep the list of copies in line with the settings ----
             if last_sync.elapsed() >= Duration::from_millis(100) {
                 last_sync = Instant::now();
-                let want: Vec<Target> = targets().into_iter().filter(|t| t.on && t.id != main_id).collect();
+                // (Developer aid: the linked PC's row counts as ticked.)
+                if dev_link() {
+                    if let Some((id, _)) = crate::link::audio::peer() {
+                        if !target(&id).on {
+                            edit(&id, |t| t.on = true);
+                        }
+                    }
+                }
+                let all: Vec<Target> = targets().into_iter().filter(|t| t.on && t.id != main_id).collect();
+                let want: Vec<Target> = all.iter().filter(|t| !is_remote(&t.id)).cloned().collect();
+                let muted = MUTED.lock().ok().and_then(|m| m.clone()).unwrap_or_default();
+                let extra = EXTRA.lock().map(|e| e.clone()).unwrap_or_default();
+                // ---- The linked PC: only the one linked now, and never while
+                // it is playing its own sound here (that would go round in a loop).
+                {
+                    use crate::link::audio as la;
+                    let peer = la::peer().map(|p| p.0);
+                    let t = all.iter().find(|t| Some(&t.id) == peer.as_ref()).filter(|_| !la::receiving());
+                    if remote.as_ref().map(|r| t.map(|t| t.id != r.id).unwrap_or(true) || r.tx.state() == la::DEAD).unwrap_or(false) {
+                        remote = None;
+                        remote_tried = Instant::now();
+                    }
+                    if let Some(t) = t {
+                        match remote.as_mut() {
+                            Some(r) => {
+                                if !r.live && r.tx.state() == la::PLAYING {
+                                    r.live = true;
+                                    r.set = (u16::MAX, -1.0);
+                                }
+                                let delay = (t.delay + extra.iter().find(|e| e.0 == t.id).map(|e| e.1).unwrap_or(0)).clamp(0, MAX_DELAY + 1000) as u16;
+                                let vol = if muted.contains(&t.id) || REMOTE_MUTE.load(Ordering::Relaxed) { 0.0 } else { t.vol.clamp(0.0, 1.0) };
+                                if r.live && (delay != r.set.0 || (vol - r.set.1).abs() > 0.001) {
+                                    r.set = (delay, vol);
+                                    r.tx.send(la::Out::Set { delay, vol });
+                                }
+                            }
+                            None if remote_tried.elapsed() >= Duration::from_secs(3) => {
+                                remote_tried = Instant::now();
+                                remote = Some(Remote { id: t.id.clone(), tx: la::open(fmt_bytes.clone()), live: false, set: (u16::MAX, -1.0), buf: Vec::new(), gap: 0 });
+                            }
+                            None => {}
+                        }
+                    }
+                    // (Its volume slider came to rest: keep it.)
+                    let rested = VOL_MOVED.lock().map(|m| m.map(|t| t.elapsed() > Duration::from_millis(800)).unwrap_or(false)).unwrap_or(false);
+                    if rested {
+                        if let Ok(mut m) = VOL_MOVED.lock() {
+                            *m = None;
+                        }
+                        save();
+                    }
+                }
                 outs.retain(|o| {
                     let keep = want.iter().any(|t| t.id == o.id);
                     if !keep {
@@ -362,8 +452,6 @@ fn engine(g: u64) -> Result<()> {
                     }
                     keep
                 });
-                let muted = MUTED.lock().ok().and_then(|m| m.clone()).unwrap_or_default();
-                let extra = EXTRA.lock().map(|e| e.clone()).unwrap_or_default();
                 for t in &want {
                     let want_delay = ms((t.delay + extra.iter().find(|e| e.0 == t.id).map(|e| e.1).unwrap_or(0)) as i64);
                     match outs.iter_mut().find(|o| o.id == t.id) {
@@ -460,6 +548,13 @@ fn engine(g: u64) -> Result<()> {
                         o.queue.extend(src.iter().copied());
                     }
                 }
+                if let Some(r) = remote.as_mut().filter(|r| r.live) {
+                    if silent {
+                        r.silence(frames);
+                    } else {
+                        r.data(src);
+                    }
+                }
                 let _ = cc.ReleaseBuffer(frames);
                 got += frames as u64;
             }
@@ -472,7 +567,13 @@ fn engine(g: u64) -> Result<()> {
                 for o in outs.iter_mut() {
                     o.queue.extend(std::iter::repeat_n(0u8, fill * block));
                 }
+                if let Some(r) = remote.as_mut().filter(|r| r.live) {
+                    r.silence(fill as u32);
+                }
                 captured = expected;
+            }
+            if let Some(r) = remote.as_mut() {
+                r.flush();
             }
             // ---- Hand it to each copy ----
             let mut dead: Vec<String> = Vec::new();
@@ -539,6 +640,46 @@ fn engine(g: u64) -> Result<()> {
     }
 }
 
+/// The copy for the linked PC: sound as it was recorded, silence as a count
+/// of frames (so nothing much is sent while nothing plays).
+struct Remote {
+    id: String,
+    tx: crate::link::audio::Tx,
+    /// The other PC answered: sound is going there.
+    live: bool,
+    /// (delay ms, volume) last sent.
+    set: (u16, f32),
+    buf: Vec<u8>,
+    gap: u32,
+}
+
+impl Remote {
+    fn data(&mut self, src: &[u8]) {
+        if self.gap > 0 {
+            self.flush();
+        }
+        self.buf.extend_from_slice(src);
+        if self.buf.len() >= 48 * 1024 {
+            self.flush();
+        }
+    }
+    fn silence(&mut self, frames: u32) {
+        if !self.buf.is_empty() {
+            self.flush();
+        }
+        self.gap = self.gap.saturating_add(frames);
+    }
+    fn flush(&mut self) {
+        if !self.buf.is_empty() {
+            self.tx.send(crate::link::audio::Out::Data(std::mem::take(&mut self.buf)));
+        }
+        if self.gap > 0 {
+            self.tx.send(crate::link::audio::Out::Gap(self.gap));
+            self.gap = 0;
+        }
+    }
+}
+
 unsafe fn open_out(en: &windows::Win32::Media::Audio::IMMDeviceEnumerator, id: &str, fmt: *const WAVEFORMATEX) -> Result<Out> {
     let dev = en.GetDevice(&HSTRING::from(id))?;
     let client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
@@ -558,6 +699,11 @@ unsafe fn open_out(en: &windows::Win32::Media::Audio::IMMDeviceEnumerator, id: &
 /// Typical delay of the device itself (ms): Bluetooth speakers buffer a lot.
 /// `bt`: outputs the app already knows are Bluetooth (matched to paired devices).
 fn device_ms(id: &str, bt: &[String]) -> i32 {
+    if is_remote(id) {
+        // The network and the other PC's speakers (its own buffer is about
+        // what a copy here has, so COPY_MS covers that).
+        return 25;
+    }
     if bt.iter().any(|b| b == id) || is_bluetooth(id) {
         170
     } else {
@@ -583,7 +729,7 @@ pub fn auto_sync(only: Option<String>) {
         };
         // The slowest of them all should be the main output (it can't be delayed).
         let ticked: Vec<String> = targets().into_iter().filter(|t| t.on && t.id != main).map(|t| t.id).collect();
-        let slowest = ticked.iter().filter(|id| device_ms(id, &bt) + COPY_MS > device_ms(&main, &bt)).max_by_key(|id| device_ms(id, &bt)).cloned();
+        let slowest = ticked.iter().filter(|id| !is_remote(id) && device_ms(id, &bt) + COPY_MS > device_ms(&main, &bt)).max_by_key(|id| device_ms(id, &bt)).cloned();
         let main = match slowest {
             Some(id) if only.is_none() || only.as_deref() == Some(id.as_str()) => {
                 make_main(&id);
@@ -717,7 +863,7 @@ fn calibrate_all(only: Option<String>) -> std::result::Result<(), String> {
     if todo.is_empty() {
         return Err(tr("Tick this speaker first (the main output is the one the others follow)").to_string());
     }
-    let names = crate::audio::list_outputs();
+    let names = outputs();
     let name = |id: &str| names.iter().find(|o| o.id == id).map(|o| short_name(&names, &o.name)).unwrap_or_default();
     let mut behind = Vec::new();
     for t in &todo {
@@ -901,6 +1047,10 @@ fn measure(main: &str) -> std::result::Result<Vec<f32>, String> {
 /// Make `id` the main output (Windows' default). The old main one joins the
 /// ticked devices so it keeps playing.
 pub fn make_main(id: &str) {
+    // (Apps here can only play to a device of this PC.)
+    if is_remote(id) {
+        return;
+    }
     let old = main_id();
     if old.as_deref() == Some(id) {
         return;
@@ -926,6 +1076,9 @@ fn endpoint_volume(id: &str) -> Option<windows::Win32::Media::Audio::Endpoints::
 
 /// A speaker's own volume (0…1) and mute.
 pub fn dev_volume(id: &str) -> Option<(f32, bool)> {
+    if is_remote(id) {
+        return Some((target(id).vol.clamp(0.0, 1.0), REMOTE_MUTE.load(Ordering::Relaxed)));
+    }
     let v = endpoint_volume(id)?;
     unsafe { Some((v.GetMasterVolumeLevelScalar().ok()?, v.GetMute().map(|m| m.as_bool()).unwrap_or(false))) }
 }
@@ -935,6 +1088,14 @@ static OWN_MAIN: Mutex<Option<(f32, Instant)>> = Mutex::new(None);
 
 pub fn set_dev_volume(id: &str, v: f32) {
     let v = v.clamp(0.0, 1.0);
+    if is_remote(id) {
+        // The engine passes it on (and saves it once the slider rests).
+        edit(id, |t| t.vol = v);
+        if let Ok(mut m) = VOL_MOVED.lock() {
+            *m = Some(Instant::now());
+        }
+        return;
+    }
     if main_id().as_deref() == Some(id) {
         if let Ok(mut o) = OWN_MAIN.lock() {
             *o = Some((v, Instant::now()));
@@ -958,7 +1119,7 @@ pub fn cluster() -> Vec<(String, String)> {
     if !config::cur().b("mo_on") {
         return Vec::new();
     }
-    let outs = crate::audio::list_outputs();
+    let outs = outputs();
     let mut v: Vec<(String, String)> = outs.iter().filter(|o| o.default).map(|o| (o.id.clone(), short_name(&outs, &o.name))).collect();
     for t in targets().into_iter().filter(|t| t.on) {
         if let Some(o) = outs.iter().find(|o| o.id == t.id && !o.default) {
@@ -1053,6 +1214,10 @@ pub fn group_target(base: &[f32], v: f32) -> Vec<f32> {
 
 /// Mute / unmute one speaker.
 pub fn set_dev_mute(id: &str, m: bool) {
+    if is_remote(id) {
+        REMOTE_MUTE.store(m, Ordering::Relaxed);
+        return;
+    }
     if let Some(e) = endpoint_volume(id) {
         unsafe {
             let _ = e.SetMute(m, std::ptr::null());

@@ -27,6 +27,8 @@ pub const PROTO: u16 = 3;
 /// What a connection is for (sent in the greeting).
 pub const FOR_SESSION: u8 = 0;
 pub const FOR_FILES: u8 = 1;
+/// Sound to play on the other PC's speakers (its own connection too).
+pub const FOR_AUDIO: u8 = 2;
 
 /// What a batch of files is for.
 pub const BATCH_CLIPBOARD: u8 = 0;
@@ -101,6 +103,17 @@ pub enum Msg {
     BatchEnd,
     /// The other side has it all (or not).
     BatchAck { ok: bool },
+    // ---- Sound (its own connection: Play on several → the other PC) ----
+    /// "Go ahead" from the PC that will play.
+    AudioOk,
+    /// The format of what follows (a WAVEFORMATEX, as Windows gives it).
+    AudioFmt(Vec<u8>),
+    /// Sound, in that format.
+    Audio(Vec<u8>),
+    /// This many frames of silence.
+    AudioGap { frames: u32 },
+    /// Play this much later (ms) than the least possible, at this volume.
+    AudioSet { delay: u16, vol: f32 },
 }
 
 struct W(Vec<u8>);
@@ -361,6 +374,24 @@ impl Msg {
                 w.u8(64);
                 w.u8(*ok as u8);
             }
+            Msg::AudioOk => w.u8(70),
+            Msg::AudioFmt(b) => {
+                w.u8(71);
+                w.blob(b);
+            }
+            Msg::Audio(b) => {
+                w.u8(72);
+                w.blob(b);
+            }
+            Msg::AudioGap { frames } => {
+                w.u8(73);
+                w.bytes(&frames.to_le_bytes());
+            }
+            Msg::AudioSet { delay, vol } => {
+                w.u8(74);
+                w.u16(*delay);
+                w.f32(*vol);
+            }
         }
         w.0
     }
@@ -450,6 +481,11 @@ impl Msg {
             62 => Msg::Data(r.blob()?),
             63 => Msg::BatchEnd,
             64 => Msg::BatchAck { ok: r.u8()? != 0 },
+            70 => Msg::AudioOk,
+            71 => Msg::AudioFmt(r.blob()?),
+            72 => Msg::Audio(r.blob()?),
+            73 => Msg::AudioGap { frames: r.u32()? },
+            74 => Msg::AudioSet { delay: r.u16()?, vol: r.f32()? },
             _ => return None,
         })
     }
@@ -685,6 +721,11 @@ mod tests {
             Msg::Wheel { delta: -120, horizontal: false },
             Msg::Button { b: 1, down: true },
             Msg::Ping { t: 123456789 },
+            Msg::AudioOk,
+            Msg::AudioFmt(vec![1; 40]),
+            Msg::Audio(vec![3; 3840]),
+            Msg::AudioGap { frames: 480 },
+            Msg::AudioSet { delay: 120, vol: 0.5 },
         ];
         for m in all {
             assert_eq!(Msg::decode(&m.encode()), Some(m));

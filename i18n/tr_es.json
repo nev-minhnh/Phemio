@@ -859,7 +859,6 @@
  "Their file names, e.g. notepad.exe, regedit.exe, mmc.exe (Task Manager → Details shows them)": "Sus nombres de archivo, p. ej. notepad.exe, regedit.exe, mmc.exe (Administrador de tareas → Detalles)",
  "What the transparency helper did inside Explorer and the apps — useful when something doesn't work": "Lo que hizo el asistente de transparencia en el Explorador y las apps — útil cuando algo no funciona",
  "Add the apps below first": "Primero añade las apps abajo",
- "Phemio 0.37.0": "Phemio 0.37.0",
  "Allow": "Permitir",
  "Asking Windows…": "Preguntando a Windows…",
  "Windows Firewall is slowing down finding other PCs": "El Firewall de Windows ralentiza la búsqueda de otros PC",
@@ -871,5 +870,13 @@
  "Source code": "Código fuente",
  "Your desktop cameo": "Your desktop cameo",
  "github.com/nev-minhnh/Phemio · MIT or Apache-2.0": "github.com/nev-minhnh/Phemio · MIT o Apache-2.0",
- "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · una Dynamic Island para Windows 11, Rust + Direct2D nativos"
+ "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · una Dynamic Island para Windows 11, Rust + Direct2D nativos",
+ "Phemio 0.38.0": "Phemio 0.38.0",
+ "Play sound from linked PCs": "Reproducir el sonido de los PC vinculados",
+ "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)": "Un PC vinculado puede usar los altavoces de este PC (en ese PC: Dispositivos → Salida de sonido → Reproducir en varios, y marca este PC)",
+ "Playing on the linked PC": "Reproduciendo en el PC vinculado",
+ "Connecting to the linked PC…": "Conectando con el PC vinculado…",
+ "The other PC is playing its sound here": "El otro PC está reproduciendo su sonido aquí",
+ "Not linked": "Sin vincular",
+ "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "El otro PC no aceptó el sonido (necesita Phemio 0.38 o posterior, con «Reproducir el sonido de los PC vinculados» activado)"
 }

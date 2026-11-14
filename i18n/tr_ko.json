@@ -859,7 +859,6 @@
  "Their file names, e.g. notepad.exe, regedit.exe, mmc.exe (Task Manager → Details shows them)": "파일 이름, 예: notepad.exe, regedit.exe, mmc.exe(작업 관리자 → 세부 정보에서 확인)",
  "What the transparency helper did inside Explorer and the apps — useful when something doesn't work": "투명 도우미가 탐색기와 앱 안에서 한 일 — 문제가 있을 때 유용",
  "Add the apps below first": "먼저 아래에 앱을 추가하세요",
- "Phemio 0.37.0": "Phemio 0.37.0",
  "Allow": "허용",
  "Asking Windows…": "Windows에 요청하는 중…",
  "Windows Firewall is slowing down finding other PCs": "Windows 방화벽 때문에 다른 PC 찾기가 느립니다",
@@ -871,5 +870,13 @@
  "Source code": "소스 코드",
  "Your desktop cameo": "Your desktop cameo",
  "github.com/nev-minhnh/Phemio · MIT or Apache-2.0": "github.com/nev-minhnh/Phemio · MIT 또는 Apache-2.0",
- "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · Windows 11용 다이내믹 아일랜드, 네이티브 Rust + Direct2D"
+ "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · Windows 11용 다이내믹 아일랜드, 네이티브 Rust + Direct2D",
+ "Phemio 0.38.0": "Phemio 0.38.0",
+ "Play sound from linked PCs": "연결된 PC의 소리 재생",
+ "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)": "연결된 PC가 이 PC의 스피커를 사용할 수 있습니다(그 PC에서: 장치 → 소리 출력 → 여러 장치에서 재생, 이 PC 선택)",
+ "Playing on the linked PC": "연결된 PC에서 재생 중",
+ "Connecting to the linked PC…": "연결된 PC에 연결하는 중…",
+ "The other PC is playing its sound here": "다른 PC가 여기에서 소리를 재생하고 있습니다",
+ "Not linked": "연결되지 않음",
+ "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "다른 PC가 소리를 받지 않았습니다(Phemio 0.38 이상과 ‘연결된 PC의 소리 재생’ 켜기가 필요합니다)"
 }

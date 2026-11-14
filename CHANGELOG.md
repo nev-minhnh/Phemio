@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.38.0
+
+- **Play on the linked PC's speakers.** With two PCs linked and *Play on several* on (Devices → Sound
+  output), the other PC shows up in the list as one more speaker: tick it and this PC's sound also plays over
+  there — with its own volume, delay, Auto-sync and Calibrate, and in the group volume. Uncompressed and
+  encrypted, on its own connection; both PCs need 0.38. *Settings → General → Play sound from linked PCs*
+  switches it off on a PC whose speakers shouldn't be used.
+- The Sound output list no longer draws (or takes clicks) over its header when scrolled.
+
 ## 0.37.0 — Phemio
 
 - **New name and look: Phemio – Your desktop cameo.** A new logo (a neon trumpet whose tube becomes the
