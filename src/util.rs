@@ -725,3 +725,78 @@ impl Drop for Prof {
         log(&format!("prof {} {:.2} ms", self.0, self.1.elapsed().as_secs_f64() * 1000.0));
     }
 }
+
+/// Noticing a stuck window thread. The thread that owns the windows notes
+/// when it starts and finishes each message; a watcher thread logs when one
+/// has been going for too long — while it is still stuck, so the log says
+/// what it was doing even if it never comes back — and the thread itself
+/// logs how long a slow one took in the end. `Crumb`s say what it was in
+/// the middle of.
+pub mod stall {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    /// When the message being handled started (ms since T0; 0 = idle).
+    static SINCE: AtomicU64 = AtomicU64::new(0);
+    static MESSAGE: AtomicU32 = AtomicU32::new(0);
+    static UI_THREAD: AtomicU32 = AtomicU32::new(0);
+    static DOING: Mutex<&'static str> = Mutex::new("");
+    /// The `SINCE` already reported by the watcher.
+    static TOLD: AtomicU64 = AtomicU64::new(0);
+
+    fn now() -> u64 {
+        T0.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+    }
+
+    /// Call once on the window thread, before its message loop.
+    pub fn start() {
+        UI_THREAD.store(unsafe { windows::Win32::System::Threading::GetCurrentThreadId() }, Relaxed);
+        now();
+        let _ = std::thread::Builder::new().name("stall-watch".into()).spawn(|| loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let since = SINCE.load(Relaxed);
+            if since != 0 && TOLD.load(Relaxed) != since && now().saturating_sub(since) >= 1000 {
+                TOLD.store(since, Relaxed);
+                let doing = DOING.lock().map(|d| *d).unwrap_or("");
+                super::log(&format!("stall: the window thread has been busy for {} ms (message 0x{:04X}{}{doing})", now() - since, MESSAGE.load(Relaxed), if doing.is_empty() { "" } else { ", " }));
+            }
+        });
+    }
+
+    /// A message is about to be handled / has been handled.
+    pub fn begin(message: u32) {
+        MESSAGE.store(message, Relaxed);
+        SINCE.store(now(), Relaxed);
+    }
+    pub fn end() {
+        let since = SINCE.swap(0, Relaxed);
+        let took = now().saturating_sub(since);
+        if since != 0 && took >= 400 {
+            super::log(&format!("stall: message 0x{:04X} took {took} ms", MESSAGE.load(Relaxed)));
+        }
+    }
+
+    /// "The window thread is doing this now" (until dropped). Does nothing
+    /// on other threads.
+    pub struct Crumb(Option<&'static str>);
+    impl Crumb {
+        pub fn new(what: &'static str) -> Crumb {
+            if UI_THREAD.load(Relaxed) != unsafe { windows::Win32::System::Threading::GetCurrentThreadId() } {
+                return Crumb(None);
+            }
+            let old = DOING.lock().map(|mut d| std::mem::replace(&mut *d, what)).unwrap_or("");
+            Crumb(Some(old))
+        }
+    }
+    impl Drop for Crumb {
+        fn drop(&mut self) {
+            if let Some(old) = self.0 {
+                if let Ok(mut d) = DOING.lock() {
+                    *d = old;
+                }
+            }
+        }
+    }
+}

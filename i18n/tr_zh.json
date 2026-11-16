@@ -871,12 +871,12 @@
  "Your desktop cameo": "Your desktop cameo",
  "github.com/nev-minhnh/Phemio · MIT or Apache-2.0": "github.com/nev-minhnh/Phemio · MIT 或 Apache-2.0",
  "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · Windows 11 的灵动岛，原生 Rust + Direct2D",
- "Phemio 0.38.0": "Phemio 0.38.0",
  "Play sound from linked PCs": "播放已连接电脑的声音",
  "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)": "已连接的电脑可以使用这台电脑的扬声器（在那台电脑上：设备 → 声音输出 → 在多个设备上播放，然后勾选这台电脑）",
  "Playing on the linked PC": "正在已连接的电脑上播放",
  "Connecting to the linked PC…": "正在连接到已连接的电脑…",
  "The other PC is playing its sound here": "另一台电脑正在这里播放它的声音",
  "Not linked": "未连接",
- "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "另一台电脑没有接收声音（需要 Phemio 0.38 或更新版本，并开启“播放已连接电脑的声音”）"
+ "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "另一台电脑没有接收声音（需要 Phemio 0.38 或更新版本，并开启“播放已连接电脑的声音”）",
+ "Phemio 0.38.1": "Phemio 0.38.1"
 }

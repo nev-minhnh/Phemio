@@ -164,6 +164,7 @@ struct State {
 static ST: Mutex<Option<State>> = Mutex::new(None);
 
 fn with<T>(f: impl FnOnce(&mut State) -> T) -> Option<T> {
+    let _c = crate::util::stall::Crumb::new("waiting for Link's state");
     let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
     g.as_mut().map(f)
 }
@@ -621,19 +622,79 @@ fn load() -> (u64, Vec<Paired>, Layout, String) {
     (me, paired, layout, v["manual"].as_str().unwrap_or("").to_string())
 }
 
+/// What `save` writes: copied out under the state lock (cheap), then
+/// protected and written by the "link-save" thread. Writing under the lock
+/// held up everything that looks at Link's state — the island's window
+/// among them — for as long as the disk (and the antivirus) took.
+struct Saved {
+    me: u64,
+    paired: Vec<(u64, String, [u8; 32], Option<std::net::Ipv4Addr>)>,
+    version: u64,
+    places: Vec<(String, (f32, f32))>,
+    manual: String,
+}
+
+/// Saves asked for and not yet on disk.
+static SAVES_WAITING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static SAVER: Mutex<Option<Sender<Saved>>> = Mutex::new(None);
+
 fn save(s: &State) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let snap = Saved {
+        me: s.me,
+        paired: s.paired.iter().map(|p| (p.id, p.name.clone(), p.secret, p.last)).collect(),
+        version: s.layout.version,
+        places: s.layout.places.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        manual: s.manual.clone(),
+    };
+    let mut g = SAVER.lock().unwrap_or_else(|e| e.into_inner());
+    if g.is_none() {
+        let (tx, rx) = channel::<Saved>();
+        let ok = std::thread::Builder::new()
+            .name("link-save".into())
+            .spawn(move || {
+                while let Ok(mut snap) = rx.recv() {
+                    // Several in a row: only the newest matters.
+                    let mut n = 1;
+                    while let Ok(newer) = rx.try_recv() {
+                        snap = newer;
+                        n += 1;
+                    }
+                    guard("link-save", || write_saved(&snap));
+                    SAVES_WAITING.fetch_sub(n, SeqCst);
+                }
+            })
+            .is_ok();
+        if ok {
+            *g = Some(tx);
+        }
+    }
+    SAVES_WAITING.fetch_add(1, SeqCst);
+    let sent = g.as_ref().map(|tx| tx.send(snap).is_ok()).unwrap_or(false);
+    if !sent {
+        SAVES_WAITING.fetch_sub(1, SeqCst);
+    }
+}
+
+fn write_saved(s: &Saved) {
     let paired: Vec<serde_json::Value> = s
         .paired
         .iter()
-        .filter_map(|p| {
-            protect(&p.secret, false).map(|b| serde_json::json!({"id": format!("{:x}", p.id), "name": p.name, "secret": crate::answers::b64_encode(&b), "last": p.last.map(|a| a.to_string()).unwrap_or_default()}))
-        })
+        .filter_map(|(id, name, secret, last)| protect(secret, false).map(|b| serde_json::json!({"id": format!("{id:x}"), "name": name, "secret": crate::answers::b64_encode(&b), "last": last.map(|a| a.to_string()).unwrap_or_default()})))
         .collect();
-    let places: serde_json::Map<String, serde_json::Value> = s.layout.places.iter().map(|(k, v)| (k.clone(), serde_json::json!([v.0, v.1]))).collect();
-    let v = serde_json::json!({"me": format!("{:x}", s.me), "paired": paired, "layout": {"version": s.layout.version, "places": places}, "manual": s.manual});
+    let places: serde_json::Map<String, serde_json::Value> = s.places.iter().map(|(k, v)| (k.clone(), serde_json::json!([v.0, v.1]))).collect();
+    let v = serde_json::json!({"me": format!("{:x}", s.me), "paired": paired, "layout": {"version": s.version, "places": places}, "manual": s.manual});
     let tmp = path().with_extension("json.tmp");
     if std::fs::write(&tmp, serde_json::to_vec_pretty(&v).unwrap_or_default()).is_ok() {
         let _ = std::fs::rename(&tmp, path());
+    }
+}
+
+/// Wait (a moment at most) for what was saved to reach the disk — on the way out.
+pub fn flush_saves() {
+    let t = Instant::now();
+    while SAVES_WAITING.load(std::sync::atomic::Ordering::SeqCst) > 0 && t.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -760,6 +821,7 @@ pub fn stop() {
     }
     input::stop();
     input::show_pointer_now();
+    flush_saves();
     // Wake the listener so it lets go of its port (it's waiting for a call).
     let _ = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], ports().1)), Duration::from_millis(300));
 }
@@ -870,6 +932,11 @@ fn neighbours() -> Vec<std::net::Ipv4Addr> {
     use windows::Win32::NetworkManagement::IpHelper::*;
     use windows::Win32::Networking::WinSock::AF_INET;
     let mut out = Vec::new();
+    // (Under Wine this call can hang Wine's own device host — and with it
+    // every file query in the process. Testing does without it.)
+    if crate::util::is_wine() {
+        return out;
+    }
     unsafe {
         let mut t: *mut MIB_IPNET_TABLE2 = std::ptr::null_mut();
         if GetIpNetTable2(AF_INET, &mut t).is_err() || t.is_null() {
@@ -993,9 +1060,15 @@ fn discover(gen: u64) {
                     let new = !s.peers.iter().any(|p| p.id == id && p.seen.elapsed() < Duration::from_secs(6));
                     s.peers.retain(|p| p.id != id);
                     s.peers.push(Peer { id, name: parts[2].to_string(), addr, seen: Instant::now() });
+                    // Where a paired PC is, for asking it directly next time: kept
+                    // from the first beacon when nothing is known, and after
+                    // that from the address it actually links from (see
+                    // run_session). A PC with several network adapters is
+                    // heard from several addresses in turn — following each
+                    // beacon rewrote link.json about every two seconds.
                     let mut moved = false;
                     if let (Some(p), std::net::IpAddr::V4(ip)) = (s.paired.iter_mut().find(|p| p.id == id), from.ip()) {
-                        if p.last != Some(ip) {
+                        if p.last.is_none() {
                             p.last = Some(ip);
                             moved = true;
                         }

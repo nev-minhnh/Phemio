@@ -871,12 +871,12 @@
  "Your desktop cameo": "Your desktop cameo",
  "github.com/nev-minhnh/Phemio · MIT or Apache-2.0": "github.com/nev-minhnh/Phemio · MIT ou Apache-2.0",
  "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · une Dynamic Island pour Windows 11, en Rust + Direct2D natifs",
- "Phemio 0.38.0": "Phemio 0.38.0",
  "Play sound from linked PCs": "Lire le son des PC liés",
  "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)": "Un PC lié peut utiliser les haut-parleurs de ce PC (sur l’autre PC : Appareils → Sortie audio → Lire sur plusieurs, puis cochez ce PC)",
  "Playing on the linked PC": "Lecture sur le PC lié",
  "Connecting to the linked PC…": "Connexion au PC lié…",
  "The other PC is playing its sound here": "L’autre PC lit son audio ici",
  "Not linked": "Non lié",
- "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "L’autre PC n’a pas accepté le son (il faut Phemio 0.38 ou plus récent, avec « Lire le son des PC liés » activé)"
+ "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "L’autre PC n’a pas accepté le son (il faut Phemio 0.38 ou plus récent, avec « Lire le son des PC liés » activé)",
+ "Phemio 0.38.1": "Phemio 0.38.1"
 }

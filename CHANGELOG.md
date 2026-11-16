@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.38.1
+
+- **Link no longer makes the pointer stutter along the screen's edges.** With Link on, every mouse
+  movement that pushed against an outer edge of the desktop — reaching for the island at the top,
+  most of all — was swallowed and replayed by Link, which made the pointer (and the island opening
+  under it) lag and sometimes stick. The outer edges are now left to Windows; only an edge with
+  another screen behind it is Link's business.
+- **Link's settings file is no longer rewritten every two seconds.** A linked PC with more than one
+  network adapter is heard from several addresses in turn, and each change was saved — while
+  everything else that needed Link's state, the island's window included, waited for the disk.
+  The address is now kept from the connection itself, and saving happens on a thread of its own.
+- If the window ever stops answering for more than a second, `phemio.log` now says for how long
+  and what it was doing (lines starting with `stall:`).
+
 ## 0.38.0
 
 - **Play on the linked PC's speakers.** With two PCs linked and *Play on several* on (Devices → Sound

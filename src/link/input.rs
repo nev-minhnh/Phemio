@@ -340,7 +340,9 @@ unsafe fn mouse_inner(code: i32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
     });
     match geo.local_move(last, pt) {
         Local::Pass => {
-            cap.last = Some(pt);
+            // (Past the desktop's edge Windows stops the pointer: remember
+            // where it will really be.)
+            cap.last = Some(geo.settle(last, pt));
             None
         }
         Local::Warp(_, x, y) => {

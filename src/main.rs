@@ -1335,6 +1335,7 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             }
         }
         WM_LINK => {
+            let _c = util::stall::Crumb::new("Link's jobs");
             for j in link::take_jobs() {
                 match j {
                     link::UiJob::Clip(c) => link::clip::set(hwnd, &c),
@@ -1377,6 +1378,7 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         0x031D /* WM_CLIPBOARDUPDATE */ => {
             if config::cur().b("link_on") {
+                let _c = util::stall::Crumb::new("offering the clipboard to the linked PC");
                 link::clip::offer(true);
             }
         }
@@ -1857,10 +1859,13 @@ fn main() {
         SetTimer(Some(host), T_MINUTE, util::ms_to_next_minute(), None);
         SetTimer(Some(host), T_TRIM, 4000, None);
 
+        util::stall::start();
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
+            util::stall::begin(msg.message);
             DispatchMessageW(&msg);
+            util::stall::end();
         }
         let _ = DeregisterShellHookWindow(host);
     }

@@ -871,12 +871,12 @@
  "Your desktop cameo": "Your desktop cameo",
  "github.com/nev-minhnh/Phemio · MIT or Apache-2.0": "github.com/nev-minhnh/Phemio · MIT hoặc Apache-2.0",
  "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D": "Phemio – Your desktop cameo · Dynamic Island cho Windows 11, viết bằng Rust + Direct2D",
- "Phemio 0.38.0": "Phemio 0.38.0",
  "Play sound from linked PCs": "Phát âm thanh từ PC đã liên kết",
  "A linked PC can use this PC's speakers (on that PC: Devices → Sound output → Play on several, then tick this PC)": "PC đã liên kết có thể dùng loa của PC này (trên PC đó: Devices → Sound output → Play on several, rồi tick PC này)",
  "Playing on the linked PC": "Đang phát trên PC đã liên kết",
  "Connecting to the linked PC…": "Đang kết nối tới PC đã liên kết…",
  "The other PC is playing its sound here": "PC kia đang phát âm thanh của nó ở đây",
  "Not linked": "Chưa liên kết",
- "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "PC kia không nhận âm thanh (cần Phemio 0.38 trở lên và bật Phát âm thanh từ PC đã liên kết)"
+ "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "PC kia không nhận âm thanh (cần Phemio 0.38 trở lên và bật Phát âm thanh từ PC đã liên kết)",
+ "Phemio 0.38.1": "Phemio 0.38.1"
 }

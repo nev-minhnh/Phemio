@@ -184,12 +184,36 @@ impl Geo {
                 return if ts.machine == self.me { Local::Warp(ti, x, y) } else { Local::Enter(ti, gp, x, y) };
             }
         }
-        // Nothing there on the map: stay on this screen (even if Windows
-        // would have moved to one of this PC's other screens).
-        if inside {
+        // Nothing there on the map. If Windows would carry the pointer onto
+        // another of this PC's screens (beside this one in Display settings
+        // but not on the map), hold it at the edge. Otherwise this is just the
+        // outer edge of the desktop — the mouse hook is told where the
+        // pointer would be before Windows stops it there, so pushing against
+        // an edge (reaching for the island at the top, a scroll bar at the
+        // side) reports points outside every screen: leave those to Windows.
+        // Holding them here meant swallowing every such movement and setting
+        // the pointer from inside the hook, which made the pointer stutter
+        // along the edges whenever Link was on.
+        if inside || self.local_at_px(pt.0, pt.1).is_none() {
             Local::Pass
         } else {
             Local::Warp(cur, e.0, e.1)
+        }
+    }
+
+    /// Where the pointer really is after a movement that was let through:
+    /// `pt` itself when it's on one of this PC's screens, else `pt` held
+    /// inside the screen `last` was on (as Windows does at the desktop's edge).
+    pub fn settle(&self, last: (i32, i32), pt: (i32, i32)) -> (i32, i32) {
+        if self.local_at_px(pt.0, pt.1).is_some() {
+            return pt;
+        }
+        match self.local_at_px(last.0, last.1) {
+            Some(i) => {
+                let (x0, y0, w, h) = self.screens[i].px;
+                (pt.0.clamp(x0, (x0 + w - 1).max(x0)), pt.1.clamp(y0, (y0 + h - 1).max(y0)))
+            }
+            None => pt,
         }
     }
 
@@ -427,12 +451,22 @@ mod tests {
         let g = desk(1);
         // Map y = 300 + 1700/1.5 ≈ 1433 → still beside Screen 1 (ends at 1440).
         assert!(matches!(g.local_move((2878, 1700), (2879, 1700)), Local::Enter(..)));
-        // Windows would carry the pointer into Screen 3 (it's right of the
-        // laptop in Display settings) — but on the map nothing is there below
-        // Screen 1's bottom... the laptop's bottom is at 300+1200=1500, so
-        // y=1790 maps to 1493: nothing to the right → held at the edge.
-        let r = g.local_move((2879, 1790), (2885, 1790));
-        assert_eq!(r, Local::Warp(0, 2879, 1790));
+        // Below Screen 1's bottom (the laptop's bottom is at 300+1200=1500, so
+        // y=1790 maps to 1493) nothing is to the right on the map — nor in
+        // Windows (Screen 3, right of the laptop in Display settings, is only
+        // 1080 high): Windows itself stops the pointer there.
+        assert_eq!(g.local_move((2879, 1790), (2885, 1790)), Local::Pass);
+    }
+
+    #[test]
+    fn held_at_an_edge_windows_would_cross() {
+        // Two screens of this PC side by side in Windows, apart on the map:
+        // the pointer mustn't slip across where the map has nothing.
+        let g = Geo { me: 1, screens: vec![scr(1, "A", (0, 0, 1000, 1000), 1.0, (0.0, 0.0)), scr(1, "B", (1000, 0, 1000, 1000), 1.0, (5000.0, 0.0))] };
+        assert_eq!(g.local_move((999, 500), (1003, 500)), Local::Warp(0, 999, 500));
+        assert_eq!(g.local_move((1000, 500), (996, 500)), Local::Warp(1, 1000, 500));
+        // …while their outer edges are Windows' own.
+        assert_eq!(g.local_move((500, 0), (500, -3)), Local::Pass);
     }
 
     #[test]
@@ -504,6 +538,24 @@ mod tests {
             }
             o => panic!("{o:?}"),
         }
+    }
+
+    #[test]
+    fn the_outer_edge_is_left_to_windows() {
+        let g = desk(1);
+        // Pushing up against the top of the laptop (nothing above it on the
+        // map, no screen there in Windows): not ours to handle.
+        assert_eq!(g.local_move((1000, 0), (1005, -4)), Local::Pass);
+        assert_eq!(g.local_move((1000, 3), (1000, 0)), Local::Pass);
+        assert_eq!(g.local_move((0, 500), (-7, 503)), Local::Pass);
+        // The pointer stays where Windows stops it, and the next movement is
+        // judged from there: along the top edge, then out through the right
+        // edge to Screen 1 on the other PC.
+        assert_eq!(g.settle((1000, 0), (1005, -4)), (1005, 0));
+        assert_eq!(g.settle((1000, 0), (1005, 20)), (1005, 20));
+        let at = g.settle((2870, 0), (2879, -6));
+        assert_eq!(at, (2879, 0));
+        assert!(matches!(g.local_move(at, (2884, 3)), Local::Enter(t, ..) if g.screens[t].key == "S1"));
     }
 
     #[test]

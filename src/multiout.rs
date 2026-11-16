@@ -89,6 +89,7 @@ static VOL_MOVED: Mutex<Option<Instant>> = Mutex::new(None);
 /// The outputs on the page: this PC's, and — while Play on several is on and
 /// the PCs are linked — the linked PC's speakers.
 pub fn outputs() -> Vec<crate::audio::Output> {
+    let _c = crate::util::stall::Crumb::new("listing the sound outputs");
     let mut v = crate::audio::list_outputs();
     if config::cur().b("mo_on") {
         if let Some((id, name)) = crate::link::audio::peer() {

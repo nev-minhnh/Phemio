@@ -5250,6 +5250,7 @@ impl Island {
             return;
         }
         let _p = util::Prof::new("island.render");
+        let _c = util::stall::Crumb::new("drawing the island");
         self.edit_view = None;
         let s = self.scale;
         if !self.surf.begin(s) {
