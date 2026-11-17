@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.38.3
+
+- **Link alone on a network no longer floods it.** While no other PC answered, Link asked every
+  address of the network directly, again and again for as long as it was on — on a big network
+  (a /22 has 1 021 addresses) a thousand at once, every few seconds at first and every 45 s for
+  ever after. Windows has to look each address up, which crowds out its table of neighbours — the
+  router among them — so everything that uses the network, the taskbar and Explorer included,
+  could stall while Link was on with nobody to link to. Now: at most the 254 addresses around
+  this PC's own, a few at a time, three times after Link is switched on, and that's all.
+  Broadcast discovery, the paired PC's last address and a typed address work as before.
+
 ## 0.38.2
 
 - **Link can no longer hold up the rest of Windows.** While two PCs are linked, Phemio watches the

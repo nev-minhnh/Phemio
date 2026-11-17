@@ -966,7 +966,11 @@ fn broadcasts() -> Vec<std::net::Ipv4Addr> {
 fn sweep_targets() -> Vec<std::net::Ipv4Addr> {
     let mut out = Vec::new();
     for (ip, bits) in local_nets() {
-        let bits = if bits < 22 { 24 } else { bits };
+        // (Never more than the 254 addresses around this PC's own: asking a
+        // bigger network address by address makes Windows look each one up,
+        // which crowds its table of neighbours — and with it everything
+        // else that uses the network.)
+        let bits = bits.max(24);
         let mask = u32::MAX << (32 - bits);
         let net = ip & mask;
         let last = net | !mask;
@@ -1174,15 +1178,17 @@ fn no_conn_reset(sock: &UdpSocket) {
 
 /// For networks (or firewalls) that drop broadcasts: ask PCs directly — a
 /// paired PC where it was last seen and every PC this one has talked to
-/// lately, every round (cheap: a handful), and, while no other PC has been
-/// heard from, every address on this PC's networks (after a second or two,
-/// then every 5 s for the first half minute, every 15 s for the first
-/// two minutes, then every 45 s). Once one round went out, the PCs that are
-/// on are in the neighbour table, so the next rounds reach them anyway.
+/// lately (cheap: a handful), and, while no other PC has been heard from,
+/// the 254 addresses around this PC's own on each network: three times per
+/// start (after a second or two, half a minute later, two minutes after
+/// that), a few at a time. Once one round went out, the PCs that are on are
+/// in the neighbour table, so the later rounds reach them anyway.
 fn sweep(gen: u64, peer_udp: u16, sock: UdpSocket) {
-    let started = Instant::now();
     let mut last_sweep: Option<Instant> = None;
     let mut said = false;
+    // How many times every address has been asked (three at most, per start).
+    let mut rounds = 0;
+    let mut last_near: Option<Instant> = None;
     while running_gen(gen) {
         std::thread::sleep(Duration::from_millis(1500));
         if !running_gen(gen) {
@@ -1190,25 +1196,27 @@ fn sweep(gen: u64, peer_udp: u16, sock: UdpSocket) {
         }
         let b = beacon();
         let mut direct: Vec<std::net::Ipv4Addr> = with(|s| s.paired.iter().filter_map(|p| p.last).collect()).unwrap_or_default();
-        direct.extend(neighbours());
+        // (The PCs this one has talked to lately: every 6 s is plenty.)
+        if last_near.map(|t| t.elapsed() >= Duration::from_secs(6)).unwrap_or(true) {
+            last_near = Some(Instant::now());
+            direct.extend(neighbours());
+        }
         direct.sort();
         direct.dedup();
         for a in &direct {
             let _ = sock.send_to(b.as_bytes(), (*a, peer_udp));
         }
         let lonely = with(|s| s.peers.iter().all(|p| p.seen.elapsed() > Duration::from_secs(20))).unwrap_or(true);
-        let up = started.elapsed();
-        let every = if up < Duration::from_secs(30) {
-            5
-        } else if up < Duration::from_secs(120) {
-            15
-        } else {
-            45
-        };
+        // Three times only — at once, after half a minute, after two more —
+        // and slowly. It used to go on for as long as no PC answered, a
+        // thousand addresses in a burst on a big network: with no other PC
+        // around, that never stopped.
+        let every = if rounds == 1 { 30 } else { 120 };
         let due = last_sweep.map(|t| t.elapsed() >= Duration::from_secs(every)).unwrap_or(true);
-        if !lonely || !due {
+        if !lonely || !due || rounds >= 3 {
             continue;
         }
+        rounds += 1;
         last_sweep = Some(Instant::now());
         let all = sweep_targets();
         if all.is_empty() {
@@ -1228,9 +1236,9 @@ fn sweep(gen: u64, peer_udp: u16, sock: UdpSocket) {
                 return;
             }
             let _ = sock.send_to(b.as_bytes(), (*a, peer_udp));
-            // (A short breather every 64 so the network isn't flooded.)
-            if i % 64 == 63 {
-                std::thread::sleep(Duration::from_millis(3));
+            // (Gently: 8 addresses, then a pause — about 6 s for 254.)
+            if i % 8 == 7 {
+                std::thread::sleep(Duration::from_millis(200));
             }
         }
     }
