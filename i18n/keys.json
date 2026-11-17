@@ -344,13 +344,14 @@
   "Looking for more networks…",
   "Looking inside files…",
   "Looking…",
+  "No other PC found",
   "Low battery",
   "Lucky day",
   "Lunar",
   "Lunar calendar",
   "Main",
   "Make main",
-  "Phemio 0.38.3",
+  "Phemio 0.38.4",
   "Mascot",
   "Mascot look",
   "Measuring the delay…",
@@ -1191,6 +1192,7 @@
   "Looking for more networks…": "Đang tìm thêm mạng…",
   "Looking inside files…": "Đang tìm trong nội dung tệp…",
   "Looking…": "Đang tìm…",
+  "No other PC found": "Không tìm thấy PC nào khác",
   "Low battery": "Pin yếu",
   "Lucky day": "Ngày hoàng đạo",
   "Lunar": "Âm",
@@ -1562,6 +1564,6 @@
   "↵ copy the answer   ·   scroll to read   ·   ←→ edit   ·   Esc close": "↵ sao chép câu trả lời   ·   cuộn để đọc   ·   ←→ sửa   ·   Esc đóng",
   "↵ open   ·   Ctrl+↵ copy link   ·   ↑↓ choose   ·   ←→ edit   ·   Esc close": "↵ mở   ·   Ctrl+↵ sao chép liên kết   ·   ↑↓ chọn   ·   ←→ sửa   ·   Esc đóng",
   "↵ open   ·   Ctrl+↵ show in folder   ·   ↑↓ choose   ·   ←→ edit   ·   Esc close": "↵ mở   ·   Ctrl+↵ mở thư mục chứa   ·   ↑↓ chọn   ·   ←→ sửa   ·   Esc đóng",
-  "Phemio 0.38.3": "Phemio 0.38.3"
+  "Phemio 0.38.4": "Phemio 0.38.4"
  }
 }

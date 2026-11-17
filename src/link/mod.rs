@@ -1070,7 +1070,10 @@ fn discover(gen: u64) {
     // (same port): when Windows Firewall has no rule for Phemio yet, a PC
     // only gets in after this one sent to it from this port first.
     match sock.try_clone() {
-        Ok(s2) => spawn("link-sweep", move || sweep(gen, peer_udp, s2)),
+        Ok(s2) => {
+            RESCAN.store(true, std::sync::atomic::Ordering::SeqCst);
+            spawn("link-sweep", move || sweep(gen, peer_udp, s2))
+        }
         Err(e) => crate::util::log(&format!("link: no direct asking ({e})")),
     }
     let mut buf = [0u8; 512];
@@ -1176,64 +1179,83 @@ fn no_conn_reset(sock: &UdpSocket) {
     }
 }
 
+/// Ask every address around this PC's own, once (set when Link is switched
+/// on, by Refresh on the Link page and by Connect).
+static RESCAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// That is going on now.
+static SCANNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Refresh on the Link page: look for other PCs again, address by address.
+pub fn rescan() {
+    RESCAN.store(true, std::sync::atomic::Ordering::SeqCst);
+    SCANNING.store(true, std::sync::atomic::Ordering::SeqCst);
+    tell_ui();
+}
+
+/// Addresses are being asked one by one right now.
+pub fn scanning() -> bool {
+    SCANNING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// For networks (or firewalls) that drop broadcasts: ask PCs directly — a
 /// paired PC where it was last seen and every PC this one has talked to
-/// lately (cheap: a handful), and, while no other PC has been heard from,
-/// the 254 addresses around this PC's own on each network: three times per
-/// start (after a second or two, half a minute later, two minutes after
-/// that), a few at a time. Once one round went out, the PCs that are on are
-/// in the neighbour table, so the later rounds reach them anyway.
+/// lately (cheap: a handful), every round; and the 254 addresses around this
+/// PC's own on each network, a few at a time — **once** when Link is
+/// switched on, and again only when asked (Refresh, Connect). It used to go
+/// on for as long as no PC answered, a thousand addresses in a burst on a
+/// big network; with no other PC around, that never stopped.
 fn sweep(gen: u64, peer_udp: u16, sock: UdpSocket) {
-    let mut last_sweep: Option<Instant> = None;
-    let mut said = false;
-    // How many times every address has been asked (three at most, per start).
-    let mut rounds = 0;
+    use std::sync::atomic::Ordering::SeqCst;
     let mut last_near: Option<Instant> = None;
+    let mut last_direct: Option<Instant> = None;
+    let mut first = true;
+    let born = Instant::now();
     while running_gen(gen) {
-        std::thread::sleep(Duration::from_millis(1500));
+        std::thread::sleep(Duration::from_millis(250));
         if !running_gen(gen) {
             break;
         }
         let b = beacon();
-        let mut direct: Vec<std::net::Ipv4Addr> = with(|s| s.paired.iter().filter_map(|p| p.last).collect()).unwrap_or_default();
-        // (The PCs this one has talked to lately: every 6 s is plenty.)
-        if last_near.map(|t| t.elapsed() >= Duration::from_secs(6)).unwrap_or(true) {
-            last_near = Some(Instant::now());
-            direct.extend(neighbours());
+        let mut known = 0;
+        if last_direct.map(|t| t.elapsed() >= Duration::from_millis(1500)).unwrap_or(false) || (first && last_direct.is_none()) {
+            let mut direct: Vec<std::net::Ipv4Addr> = with(|s| s.paired.iter().filter_map(|p| p.last).collect()).unwrap_or_default();
+            // (The PCs this one has talked to lately: every 6 s is plenty.)
+            if last_near.map(|t| t.elapsed() >= Duration::from_secs(6)).unwrap_or(true) {
+                last_near = Some(Instant::now());
+                direct.extend(neighbours());
+            }
+            direct.sort();
+            direct.dedup();
+            for a in &direct {
+                let _ = sock.send_to(b.as_bytes(), (*a, peer_udp));
+            }
+            known = direct.len();
+            last_direct = Some(Instant::now());
         }
-        direct.sort();
-        direct.dedup();
-        for a in &direct {
-            let _ = sock.send_to(b.as_bytes(), (*a, peer_udp));
+        // (Just switched on: give broadcasts a moment to find the PC first.)
+        if (first && born.elapsed() < Duration::from_millis(1500)) || !RESCAN.swap(false, SeqCst) {
+            continue;
         }
+        // (Switched on with a PC already answering: no need.)
         let lonely = with(|s| s.peers.iter().all(|p| p.seen.elapsed() > Duration::from_secs(20))).unwrap_or(true);
-        // Three times only — at once, after half a minute, after two more —
-        // and slowly. It used to go on for as long as no PC answered, a
-        // thousand addresses in a burst on a big network: with no other PC
-        // around, that never stopped.
-        let every = if rounds == 1 { 30 } else { 120 };
-        let due = last_sweep.map(|t| t.elapsed() >= Duration::from_secs(every)).unwrap_or(true);
-        if !lonely || !due || rounds >= 3 {
-            continue;
-        }
-        rounds += 1;
-        last_sweep = Some(Instant::now());
-        let all = sweep_targets();
+        let all = if first && !lonely { Vec::new() } else { sweep_targets() };
+        first = false;
         if all.is_empty() {
+            SCANNING.store(false, SeqCst);
+            tell_ui();
             continue;
         }
-        if !said {
-            said = true;
-            crate::util::log(&format!(
-                "link: also asking {} addresses on {:?} directly (and {} known PCs every round)",
-                all.len(),
-                local_nets().iter().map(|(ip, b)| format!("{}/{b}", std::net::Ipv4Addr::from(*ip))).collect::<Vec<_>>(),
-                direct.len()
-            ));
-        }
+        SCANNING.store(true, SeqCst);
+        tell_ui();
+        crate::util::log(&format!(
+            "link: asking {} addresses on {:?} directly, once ({} known PCs every round)",
+            all.len(),
+            local_nets().iter().map(|(ip, b)| format!("{}/{b}", std::net::Ipv4Addr::from(*ip))).collect::<Vec<_>>(),
+            known
+        ));
         for (i, a) in all.iter().enumerate() {
             if !running_gen(gen) {
-                return;
+                break;
             }
             let _ = sock.send_to(b.as_bytes(), (*a, peer_udp));
             // (Gently: 8 addresses, then a pause — about 6 s for 254.)
@@ -1241,7 +1263,12 @@ fn sweep(gen: u64, peer_udp: u16, sock: UdpSocket) {
                 std::thread::sleep(Duration::from_millis(200));
             }
         }
+        // (Answers take a moment to come in.)
+        std::thread::sleep(Duration::from_millis(800));
+        SCANNING.store(false, SeqCst);
+        tell_ui();
     }
+    SCANNING.store(false, SeqCst);
 }
 
 /// The bigger-id PC calls too, now and then (in case the call can't get in).
@@ -1364,6 +1391,7 @@ pub fn disconnect() {
 /// "Connect": call the paired PC again.
 pub fn reconnect() {
     forget_failures();
+    RESCAN.store(true, std::sync::atomic::Ordering::SeqCst);
     let target = with(|s| {
         s.hold = false;
         s.quiet = false;

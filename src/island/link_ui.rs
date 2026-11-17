@@ -382,9 +382,25 @@ impl Island {
             }
             _ => {
                 self.surf.text(tr("PCs on your network"), &self.f.label, rf(px0, y, pw, 16.0), self.fg(0.5 * a));
+                // Refresh: ask the addresses around this PC once more (it's
+                // done once when Link is switched on, not all the time).
+                let scanning = crate::link::scanning();
+                if !scanning {
+                    let label = tr("Refresh");
+                    let w = g.measure(label, &self.f.tiny) + 20.0;
+                    let r = rf(px0 + pw - w, y - 3.0, w, 22.0);
+                    let hot = self.hot == Some(Hit::LinkRescan);
+                    self.surf.fill_rr(r, 11.0, self.fg(if hot { 0.16 } else { 0.08 } * a));
+                    self.surf.text(label, &self.f.tiny_c, r, self.fg(0.85 * a));
+                    self.hits.push((Hit::LinkRescan, r));
+                }
                 y += 22.0;
                 if v.nearby.is_empty() {
-                    self.thinking_text(tr("Looking…"), rf(px0, y, pw, 18.0), a);
+                    if scanning {
+                        self.thinking_text(tr("Looking…"), rf(px0, y, pw, 18.0), a);
+                    } else {
+                        self.surf.text(tr("No other PC found"), &self.f.body, rf(px0, y, pw, 18.0), self.fg(0.7 * a));
+                    }
                     y += 20.0;
                     self.surf.text_wrap(tr("Open Phemio on the other PC, on the same network."), &self.f.wrap_src, rf(px0, y, pw, 40.0), self.fg(0.5 * a));
                 } else {

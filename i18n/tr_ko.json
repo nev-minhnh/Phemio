@@ -305,6 +305,7 @@
  "Looking for more devices…": "장치 더 찾는 중…",
  "Looking for more networks…": "네트워크 더 찾는 중…",
  "Looking…": "찾는 중…",
+ "No other PC found": "다른 PC를 찾지 못했습니다",
  "Low battery": "배터리 부족",
  "Lucky day": "길일",
  "Lunar": "음력",
@@ -878,5 +879,5 @@
  "The other PC is playing its sound here": "다른 PC가 여기에서 소리를 재생하고 있습니다",
  "Not linked": "연결되지 않음",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "다른 PC가 소리를 받지 않았습니다(Phemio 0.38 이상과 ‘연결된 PC의 소리 재생’ 켜기가 필요합니다)",
- "Phemio 0.38.3": "Phemio 0.38.3"
+ "Phemio 0.38.4": "Phemio 0.38.4"
 }

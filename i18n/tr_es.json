@@ -305,6 +305,7 @@
  "Looking for more devices…": "Buscando más dispositivos…",
  "Looking for more networks…": "Buscando más redes…",
  "Looking…": "Buscando…",
+ "No other PC found": "No se encontró ningún otro PC",
  "Low battery": "Batería baja",
  "Lucky day": "Día propicio",
  "Lunar": "Lunar",
@@ -878,5 +879,5 @@
  "The other PC is playing its sound here": "El otro PC está reproduciendo su sonido aquí",
  "Not linked": "Sin vincular",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "El otro PC no aceptó el sonido (necesita Phemio 0.38 o posterior, con «Reproducir el sonido de los PC vinculados» activado)",
- "Phemio 0.38.3": "Phemio 0.38.3"
+ "Phemio 0.38.4": "Phemio 0.38.4"
 }

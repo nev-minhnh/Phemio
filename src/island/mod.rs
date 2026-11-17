@@ -485,6 +485,7 @@ pub enum Hit {
     LinkAddr,
     LinkAddrGo,
     LinkFirewall,
+    LinkRescan,
     /// Shelf page: this PC's / the other PC's shelf; get one / all from there.
     ShelfTab(bool),
     ShelfGet(usize),
@@ -4673,6 +4674,7 @@ impl Island {
             }
             Hit::LinkConnect => crate::link::reconnect(),
             Hit::LinkFirewall => crate::link::firewall::allow(),
+            Hit::LinkRescan => crate::link::rescan(),
             Hit::LinkIdentify => crate::link::identify(),
             Hit::LinkAddr => self.begin_edit(EditTarget::LinkAddr),
             Hit::LinkAddrGo => {

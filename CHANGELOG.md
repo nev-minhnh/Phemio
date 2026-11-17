@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.38.4
+
+- **Link asks the network's addresses once, not over and over.** One pass when Link is switched
+  on (the 254 addresses around this PC's own, a few at a time, about 6 s), and that's it — no
+  more repeats while no other PC answers. **Refresh** on the Link page (next to *PCs on your
+  network*) asks again when you want it to, and so does *Connect*. Broadcast discovery keeps
+  listening all the time, as before, so a PC that starts Phemio later still shows up on a
+  network that lets broadcasts through.
+- The Link page says *No other PC found* once the pass is over, instead of *Looking…* for ever.
+
 ## 0.38.3
 
 - **Link alone on a network no longer floods it.** While no other PC answered, Link asked every
