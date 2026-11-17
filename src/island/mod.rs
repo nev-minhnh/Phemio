@@ -5031,9 +5031,15 @@ impl Island {
                     thread_local! {
                         static LAST: std::cell::Cell<(Option<Instant>, std::time::Duration)> = const { std::cell::Cell::new((None, std::time::Duration::ZERO)) };
                     }
+                    // And when only the little companion moves (its tail, its
+                    // ears — for as long as it is out): 30 frames a second.
+                    thread_local! {
+                        static CALM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+                    }
                     let (ended, cost) = LAST.get();
                     if let Some(e) = ended {
-                        if e.elapsed() < cost.min(std::time::Duration::from_millis(40)) {
+                        let gap = if CALM.get() { cost.max(std::time::Duration::from_millis(30)) } else { cost };
+                        if e.elapsed() < gap.min(std::time::Duration::from_millis(40)) {
                             crate::util::diag::count("anim.skipped");
                             return;
                         }
@@ -5045,11 +5051,27 @@ impl Island {
                     let dt = frame_clock::frames(now - self.last_tick);
                     self.last_tick = now;
                     let mut moving = false;
-                    for s in [&mut self.w, &mut self.h, &mut self.a_col, &mut self.a_peek, &mut self.a_exp, &mut self.slide, &mut self.dev_card, &mut self.blink, &mut self.look, &mut self.tilt, &mut self.ear, &mut self.breath, &mut self.masc_fade, &mut self.walk, &mut self.look_y, &mut self.flick, &mut self.pk_a, &mut self.out_anim, &mut self.hop, &mut self.smile, &mut self.wag, &mut self.ctl_anim, &mut self.cv_anim, &mut self.srch_a, &mut self.tr_a, &mut self.cal_slide, &mut self.cal_fade, &mut self.pbar] {
-                        moving |= s.step(dt);
+                    let mut core = false;
+                    for (i, s) in [&mut self.w, &mut self.h, &mut self.a_col, &mut self.a_peek, &mut self.a_exp, &mut self.slide, &mut self.dev_card, &mut self.blink, &mut self.look, &mut self.tilt, &mut self.ear, &mut self.breath, &mut self.masc_fade, &mut self.walk, &mut self.look_y, &mut self.flick, &mut self.pk_a, &mut self.out_anim, &mut self.hop, &mut self.smile, &mut self.wag, &mut self.ctl_anim, &mut self.cv_anim, &mut self.srch_a, &mut self.tr_a, &mut self.cal_slide, &mut self.cal_fade, &mut self.pbar].into_iter().enumerate() {
+                        let m = s.step(dt);
+                        if m && crate::util::diag::on() {
+                            const NAMES: [&str; 28] = ["spring.w", "spring.h", "spring.a_col", "spring.a_peek", "spring.a_exp", "spring.slide", "spring.dev_card", "spring.blink", "spring.look", "spring.tilt", "spring.ear", "spring.breath", "spring.masc_fade", "spring.walk", "spring.look_y", "spring.flick", "spring.pk_a", "spring.out_anim", "spring.hop", "spring.smile", "spring.wag", "spring.ctl_anim", "spring.cv_anim", "spring.srch_a", "spring.tr_a", "spring.cal_slide", "spring.cal_fade", "spring.pbar"];
+                            crate::util::diag::count(NAMES[i]);
+                        }
+                        moving |= m;
+                        // (7–15 and 18–20: the companion's own springs.)
+                        if m && !matches!(i, 7..=15 | 18..=20) {
+                            core = true;
+                        }
                     }
-                    moving |= self.ui.step(dt);
-                    moving |= self.ease_levels(dt);
+                    if self.ui.step(dt) {
+                        moving = true;
+                        core = true;
+                    }
+                    if self.ease_levels(dt) {
+                        moving = true;
+                        core = true;
+                    }
                     if self.eq_wanted() {
                         self.eq_t += dt;
                     }
@@ -5060,8 +5082,10 @@ impl Island {
                     }
                     if self.keep_anim {
                         crate::util::diag::count("anim.keep");
+                        core = true;
                     }
                     moving |= std::mem::take(&mut self.keep_anim);
+                    CALM.set(moving && !core);
                     // Search closed and the island is small again: shrink the window back.
                     if !moving && self.tall && !self.search_popup() && self.trans.is_none() {
                         self.tall = false;
@@ -5413,7 +5437,12 @@ impl Island {
         }
         // A long line scrolling: frames while it moves, a timer for its pauses.
         match self.surf.take_marquee() {
-            // (25 frames a second is plenty for text gliding by, and light.)
+            // While it moves: every frame when frames are cheap (drawn by
+            // the graphics card) — text gliding by on a timer of its own
+            // never lands on the display's frames, and that shows as
+            // judder. On the processor, 25 frames a second: plenty for
+            // text, and light.
+            Some(t) if t <= 0.0 && gfx::hardware() && self.surf.last_cost.get() < 5000 => self.keep_anim = true,
             Some(t) => unsafe {
                 SetTimer(Some(self.hwnd), T_MARQUEE, ((t * 1000.0) as u32).max(40), None);
             },

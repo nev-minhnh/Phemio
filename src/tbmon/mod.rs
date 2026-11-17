@@ -28,8 +28,10 @@ const CLASS: PCWSTR = w!("PhemioTaskbarMonitor");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Metric {
-    Net,
-    DiskIo,
+    NetUp,
+    NetDown,
+    DiskRead,
+    DiskWrite,
     Cpu,
     CpuSpeed,
     Gpu,
@@ -38,25 +40,29 @@ pub enum Metric {
     Npu,
 }
 
-pub const METRICS: [(Metric, &str, &str, &str); 8] = [
-    (Metric::Net, "net", "Network ↑ / ↓", "Upload and download speed"),
+pub const METRICS: [(Metric, &str, &str, &str); 10] = [
+    (Metric::NetUp, "up", "Upload speed", "Network, sent"),
+    (Metric::NetDown, "down", "Download speed", "Network, received"),
     (Metric::Cpu, "cpu", "CPU usage", "Same number as Task Manager"),
     (Metric::Ram, "ram", "Memory", "RAM in use"),
     (Metric::CpuSpeed, "spd", "CPU speed", "Current clock in GHz"),
     (Metric::Gpu, "gpu", "GPU usage", "Busiest engine of the graphics card"),
-    (Metric::DiskIo, "dio", "Disk read / write", "All disks"),
+    (Metric::DiskRead, "drd", "Disk read", "All disks"),
+    (Metric::DiskWrite, "dwr", "Disk write", "All disks"),
     (Metric::DiskSpace, "dsk", "Disk space", "Used / total of the chosen drives"),
     (Metric::Npu, "npu", "NPU usage", "AI accelerator (if Windows reports one)"),
 ];
 
 /// Per-item padding keys (left, top, right, bottom), in METRICS order.
-pub const PAD_KEYS: [[&str; 4]; 8] = [
-    ["tbm_pad_net_l", "tbm_pad_net_t", "tbm_pad_net_r", "tbm_pad_net_b"],
+pub const PAD_KEYS: [[&str; 4]; 10] = [
+    ["tbm_pad_up_l", "tbm_pad_up_t", "tbm_pad_up_r", "tbm_pad_up_b"],
+    ["tbm_pad_down_l", "tbm_pad_down_t", "tbm_pad_down_r", "tbm_pad_down_b"],
     ["tbm_pad_cpu_l", "tbm_pad_cpu_t", "tbm_pad_cpu_r", "tbm_pad_cpu_b"],
     ["tbm_pad_ram_l", "tbm_pad_ram_t", "tbm_pad_ram_r", "tbm_pad_ram_b"],
     ["tbm_pad_spd_l", "tbm_pad_spd_t", "tbm_pad_spd_r", "tbm_pad_spd_b"],
     ["tbm_pad_gpu_l", "tbm_pad_gpu_t", "tbm_pad_gpu_r", "tbm_pad_gpu_b"],
-    ["tbm_pad_dio_l", "tbm_pad_dio_t", "tbm_pad_dio_r", "tbm_pad_dio_b"],
+    ["tbm_pad_drd_l", "tbm_pad_drd_t", "tbm_pad_drd_r", "tbm_pad_drd_b"],
+    ["tbm_pad_dwr_l", "tbm_pad_dwr_t", "tbm_pad_dwr_r", "tbm_pad_dwr_b"],
     ["tbm_pad_dsk_l", "tbm_pad_dsk_t", "tbm_pad_dsk_r", "tbm_pad_dsk_b"],
     ["tbm_pad_npu_l", "tbm_pad_npu_t", "tbm_pad_npu_r", "tbm_pad_npu_b"],
 ];
@@ -327,28 +333,12 @@ fn build_lines(s: &Snapshot) -> (Vec<Column>, Vec<Line>) {
             continue;
         }
         match m {
-            Metric::Net => {
-                let up = Line { metric: m, glyph: Glyph::Up, label: "↑", value: metrics::rate(s.tx), short: metrics::rate_short(s.tx), template: "8.8KB/s" };
-                let dn = Line { metric: m, glyph: Glyph::Down, label: "↓", value: metrics::rate(s.rx), short: metrics::rate_short(s.rx), template: "8.8KB/s" };
-                if let Some(p) = pending.take() {
-                    cols.push(Column { top: p, bottom: None });
-                }
-                flat.push(up.clone());
-                flat.push(dn.clone());
-                cols.push(Column { top: up, bottom: Some(dn) });
-            }
-            Metric::DiskIo => {
-                let r = Line { metric: m, glyph: Glyph::Read, label: "R", value: metrics::rate(s.disk_read), short: metrics::rate_short(s.disk_read), template: "8.8KB/s" };
-                let w = Line { metric: m, glyph: Glyph::Write, label: "W", value: metrics::rate(s.disk_write), short: metrics::rate_short(s.disk_write), template: "8.8KB/s" };
-                if let Some(p) = pending.take() {
-                    cols.push(Column { top: p, bottom: None });
-                }
-                flat.push(r.clone());
-                flat.push(w.clone());
-                cols.push(Column { top: r, bottom: Some(w) });
-            }
             _ => {
                 let l = match m {
+                    Metric::NetUp => Some(Line { metric: m, glyph: Glyph::Up, label: "↑", value: metrics::rate(s.tx), short: metrics::rate_short(s.tx), template: "8.8KB/s" }),
+                    Metric::NetDown => Some(Line { metric: m, glyph: Glyph::Down, label: "↓", value: metrics::rate(s.rx), short: metrics::rate_short(s.rx), template: "8.8KB/s" }),
+                    Metric::DiskRead => Some(Line { metric: m, glyph: Glyph::Read, label: "R", value: metrics::rate(s.disk_read), short: metrics::rate_short(s.disk_read), template: "8.8KB/s" }),
+                    Metric::DiskWrite => Some(Line { metric: m, glyph: Glyph::Write, label: "W", value: metrics::rate(s.disk_write), short: metrics::rate_short(s.disk_write), template: "8.8KB/s" }),
                     Metric::Cpu => Some(Line { metric: m, glyph: Glyph::Cpu, label: "CPU", value: format!("{:.0}%", s.cpu), short: format!("{:.0}%", s.cpu), template: "88%" }),
                     Metric::Ram => Some(Line { metric: m, glyph: Glyph::Ram, label: "RAM", value: format!("{:.0}%", s.ram), short: format!("{:.0}%", s.ram), template: "88%" }),
                     Metric::CpuSpeed => s.mhz.map(|mhz| Line { metric: m, glyph: Glyph::Speed, label: "SPD", value: format!("{:.2}", mhz / 1000.0), short: format!("{:.1}", mhz / 1000.0), template: "8.88" }),
@@ -393,6 +383,8 @@ pub struct Monitor {
     worker: Option<Worker>,
     snap: Option<Snapshot>,
     last_key: String,
+    /// Where the window was last put (x, y, w, h in the taskbar).
+    placed: Option<(i32, i32, i32, i32)>,
     scale: f32,
     vertical: bool,
     drag: Option<(i32, i32)>,
@@ -453,6 +445,7 @@ impl Monitor {
             worker: Some(Worker::start(host, msg)),
             snap: None,
             last_key: String::new(),
+            placed: None,
             scale: 1.0,
             vertical: false,
             drag: None,
@@ -506,6 +499,7 @@ impl Monitor {
                 Err(e) => self.status = format!("Couldn't attach to the taskbar: {e}"),
             }
         }
+        self.placed = None;
         self.last_key.clear();
     }
 
@@ -812,47 +806,81 @@ impl Monitor {
     /// The taskbar's colour right next to the widget (screen pixels), so the
     /// widget's background blends in. Sampled at most every 3 s.
     fn taskbar_color(&mut self, tb: RECT, light: bool) -> u32 {
+        // Reading pixels off the screen makes Windows put the whole desktop
+        // together for each one — tens of milliseconds. So it is done on a
+        // thread of its own; this takes what that thread last found.
+        static FOUND: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+        static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let fallback = if light { 0xf3f3f3 } else { 0x202020 };
+        let found = FOUND.lock().ok().and_then(|f| *f);
         if let Some((c, t)) = self.bg {
             if t.elapsed().as_secs() < 3 {
-                return c;
+                return found.unwrap_or(c);
             }
         }
-        let fallback = if light { 0xf3f3f3 } else { 0x202020 };
-        let c = unsafe {
-            let mut me = RECT::default();
-            let _ = GetWindowRect(self.hwnd, &mut me);
-            let have_me = me.right - me.left > 2;
-            // Points on the bare taskbar just outside the widget.
-            let pts: Vec<(i32, i32)> = if self.vertical {
-                let y = if have_me && me.top - 6 > tb.top { me.top - 6 } else { me.bottom + 6 };
-                vec![(tb.left + 3, y), (tb.right - 4, y), ((tb.left + tb.right) / 2, y)]
-            } else {
-                let x = if have_me && me.left - 6 > tb.left { me.left - 6 } else { me.right + 6 };
-                vec![(x, tb.top + 3), (x, tb.bottom - 4), (x - 3, tb.top + 3)]
-            };
-            use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
-            let dc = GetDC(None);
-            let mut got: Vec<u32> = Vec::new();
-            for (x, y) in pts {
-                let p = GetPixel(dc, x, y);
-                if p.0 != 0xFFFF_FFFF {
-                    // COLORREF is 0x00BBGGRR.
-                    let v = p.0;
-                    got.push(((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff));
-                }
-            }
-            ReleaseDC(None, dc);
-            // Most common sample (an icon or hover highlight can spoil one).
-            got.iter().copied().max_by_key(|c| got.iter().filter(|d| *d == c).count()).unwrap_or(fallback)
-        };
+        let c = found.or(self.bg.map(|b| b.0)).unwrap_or(fallback);
         self.bg = Some((c, std::time::Instant::now()));
+        let mut me = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.hwnd, &mut me);
+        }
+        let have_me = me.right - me.left > 2;
+        // Points on the bare taskbar just outside the widget.
+        let pts: Vec<(i32, i32)> = if self.vertical {
+            let y = if have_me && me.top - 6 > tb.top { me.top - 6 } else { me.bottom + 6 };
+            vec![(tb.left + 3, y), (tb.right - 4, y), ((tb.left + tb.right) / 2, y)]
+        } else {
+            let x = if have_me && me.left - 6 > tb.left { me.left - 6 } else { me.right + 6 };
+            vec![(x, tb.top + 3), (x, tb.bottom - 4), (x - 3, tb.top + 3)]
+        };
+        if !BUSY.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let spawned = std::thread::Builder::new().name("tbmon-colour".into()).spawn(move || {
+                use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+                let mut got: Vec<u32> = Vec::new();
+                unsafe {
+                    let dc = GetDC(None);
+                    for (x, y) in pts {
+                        let p = GetPixel(dc, x, y);
+                        if p.0 != 0xFFFF_FFFF {
+                            // COLORREF is 0x00BBGGRR.
+                            let v = p.0;
+                            got.push(((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff));
+                        }
+                    }
+                    ReleaseDC(None, dc);
+                }
+                // Most common sample (an icon or hover highlight can spoil one).
+                if let Some(c) = got.iter().copied().max_by_key(|c| got.iter().filter(|d| *d == c).count()) {
+                    if let Ok(mut f) = FOUND.lock() {
+                        *f = Some(c);
+                    }
+                }
+                BUSY.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+            if spawned.is_err() {
+                BUSY.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
         c
     }
 
     fn place(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        // Moving or re-stacking a window inside the taskbar goes through
+        // Explorer, and waits for it: measured, up to 60 ms — once a second,
+        // on the thread that draws everything else. So only when the place
+        // or size really changed, or something of Explorer's got in front.
         unsafe {
-            let _ = SetWindowPos(self.hwnd, Some(HWND_TOP), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            let _d = crate::util::diag::Span::new("tbmon.place");
+            let moved = self.placed != Some((x, y, w, h));
+            let covered = !GetWindow(self.hwnd, GW_HWNDPREV).unwrap_or_default().is_invalid();
+            let hidden = !IsWindowVisible(self.hwnd).as_bool();
+            if moved || covered || hidden {
+                crate::util::diag::count("tbmon.moved");
+                let _ = SetWindowPos(self.hwnd, Some(HWND_TOP), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                self.placed = Some((x, y, w, h));
+            }
         }
+        let _d = crate::util::diag::Span::new("tbmon.present");
         self.surf.present_child(self.hwnd);
         self.status = format!("Showing in the taskbar ({}×{} px)", w, h);
     }

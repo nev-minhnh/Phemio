@@ -3,17 +3,23 @@
 //! Every window draws into a 32-bit DIB with a Direct2D DC render target and
 //! is pushed to the screen with UpdateLayeredWindowIndirect.
 //!
-//! The target is a **hardware** one where it can be (Settings → General →
-//! Draw with the graphics card): Direct2D rasterises on the GPU and copies
-//! the finished frame into the DIB, which takes the drawing itself off the
-//! window thread's processor time — a frame of the open island cost about
-//! 10 ms on the processor, more than a fast display's frame lasts. It costs
-//! memory (Direct3D and the GPU driver get loaded). The **software** target
-//! is the fallback, always there: when the hardware one can't be made, when
-//! it fails while drawing, when it turns out slower on this PC (both are
-//! timed once, see `calibrate`), or when the setting is off. Everything
-//! else — the DIB, the layered windows, partial redraws — is the same for
-//! both, so the two can be swapped while the app runs.
+//! Where it can be (Settings → General → Draw with the graphics card), the
+//! frame is drawn **on the graphics card**: a Direct2D device context draws
+//! into a Direct3D texture, and the finished frame — or just the part that
+//! was drawn — is copied from there into the DIB. Measured on a real PC
+//! (integrated Radeon, 150 % scaling, a 120 Hz display): the pieces of a
+//! frame take 0.1–1 ms there whatever the window's size, and bringing a
+//! frame back about a millisecond, where the software DC target needed
+//! 1.3 ms for an *empty* open island and over 9 ms for an empty Settings
+//! window. (A *hardware DC render target*, tried in 0.39.0, was no faster
+//! than the software one: its cost is the DC, not the drawing.)
+//!
+//! The **software** DC target is the fallback, always there: when no
+//! graphics card can be used, when a frame fails there, when it turns out
+//! slower on this PC (both are timed once, see `calibrate`), or when the
+//! setting is off. Everything after drawing — the DIB, the layered windows,
+//! partial redraws — is the same for both, so the two can be swapped while
+//! the app runs.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -23,7 +29,10 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISurface};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
@@ -199,17 +208,188 @@ fn hardware_failed(e: &Error, recreate: bool) {
         }
         GEN.fetch_add(1, Relaxed);
     }
+    // (A new device next time: this one may be gone — driver reset, the
+    // card removed, the session locked.)
+    GPU.with(|g| *g.borrow_mut() = None);
 }
 
-/// A DC render target of the kind wanted, with its brush.
-fn make_target(hw: bool) -> Result<(ID2D1DCRenderTarget, ID2D1RenderTarget, ID2D1SolidColorBrush)> {
-    // (ISLET_GPU_FAIL: developer aid — as if no graphics card could be used.)
-    if hw && std::env::var("ISLET_GPU_FAIL").is_ok() {
-        return Err(Error::from(E_FAIL));
+/// Drawing code that leaves clips on (or takes one off too many): said once
+/// per kind and window size, and put right on the spot.
+fn note_unbalanced(what: &str, w: i32, h: i32) {
+    thread_local! {
+        static SAID: RefCell<Vec<(usize, i32, i32)>> = const { RefCell::new(Vec::new()) };
+    }
+    let key = (what.len(), w, h);
+    let new = SAID.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.contains(&key) || s.len() > 16 {
+            false
+        } else {
+            s.push(key);
+            true
+        }
+    });
+    if new {
+        crate::util::log(&format!("render: {what} (a {w}×{h} surface) — put right"));
+    }
+}
+
+/// The graphics card, for this thread's surfaces: a Direct3D device and
+/// the Direct2D device on it (pictures and brushes made with one surface's
+/// context can be used with every other's).
+#[derive(Clone)]
+struct Gpu {
+    dev: ID3D11Device,
+    ctx: ID3D11DeviceContext,
+    d2: ID2D1Device,
+}
+
+thread_local! {
+    static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
+}
+
+fn gpu() -> Result<Gpu> {
+    if let Some(g) = GPU.with(|g| g.borrow().clone()) {
+        return Ok(g);
     }
     unsafe {
+        let mut dev: Option<ID3D11Device> = None;
+        let mut ctx: Option<ID3D11DeviceContext> = None;
+        // (A real graphics card only: Direct3D on the processor would be the
+        // slowest of all ways to draw.)
+        D3D11CreateDevice(None, D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut dev), None, Some(&mut ctx))?;
+        let (dev, ctx) = (dev.ok_or_else(|| Error::from(E_FAIL))?, ctx.ok_or_else(|| Error::from(E_FAIL))?);
+        let dxgi: IDXGIDevice = dev.cast()?;
+        let f1: ID2D1Factory1 = g().d2d.cast()?;
+        let d2 = f1.CreateDevice(&dxgi)?;
+        let name = dxgi.GetAdapter().and_then(|a| a.GetDesc()).map(|d| String::from_utf16_lossy(&d.Description).split('\0').next().unwrap_or("").to_string()).unwrap_or_default();
+        crate::util::log(&format!("render: graphics card: {name}"));
+        let g = Gpu { dev, ctx, d2 };
+        GPU.with(|x| *x.borrow_mut() = Some(g.clone()));
+        Ok(g)
+    }
+}
+
+/// A surface's picture on the graphics card: Direct2D draws into `tex`
+/// there; the finished frame (or the part of it that was drawn) is copied
+/// to `staging`, which the processor can read, and from there into the
+/// surface's DIB — measured, about a millisecond — so that everything after
+/// drawing (layered windows, their see-through parts taking no clicks,
+/// partial updates) is exactly as with the software target.
+struct Card {
+    gpu: Gpu,
+    dcx: ID2D1DeviceContext,
+    tex: Option<ID3D11Texture2D>,
+    staging: Option<ID3D11Texture2D>,
+    target: Option<ID2D1Bitmap1>,
+    w: i32,
+    h: i32,
+    /// Nothing has been drawn into `tex` yet (it doesn't hold the DIB's picture).
+    fresh: bool,
+}
+
+impl Card {
+    /// The textures, `w`×`h`.
+    unsafe fn ensure(&mut self, w: i32, h: i32) -> Result<()> {
+        if self.tex.is_some() && self.w == w && self.h == h {
+            return Ok(());
+        }
+        self.dcx.SetTarget(None);
+        self.target = None;
+        self.tex = None;
+        self.staging = None;
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w as u32,
+            Height: h as u32,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut tex: Option<ID3D11Texture2D> = None;
+        self.gpu.dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
+        let tex = tex.ok_or_else(|| Error::from(E_FAIL))?;
+        let mut staging: Option<ID3D11Texture2D> = None;
+        self.gpu.dev.CreateTexture2D(&D3D11_TEXTURE2D_DESC { Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32, ..desc }, None, Some(&mut staging))?;
+        let surf: IDXGISurface = tex.cast()?;
+        let bp = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            colorContext: std::mem::ManuallyDrop::new(None),
+        };
+        self.target = Some(self.dcx.CreateBitmapFromDxgiSurface(&surf, Some(&bp))?);
+        self.tex = Some(tex);
+        self.staging = Some(staging.ok_or_else(|| Error::from(E_FAIL))?);
+        self.w = w;
+        self.h = h;
+        self.fresh = true;
+        Ok(())
+    }
+
+    /// `r` of the picture, from the graphics card into the DIB at `bits`.
+    unsafe fn read_back(&self, r: RECT, bits: *mut u8) -> Result<()> {
+        let (Some(tex), Some(staging)) = (self.tex.as_ref(), self.staging.as_ref()) else { return Err(Error::from(E_FAIL)) };
+        let r = RECT { left: r.left.clamp(0, self.w), top: r.top.clamp(0, self.h), right: r.right.clamp(0, self.w), bottom: r.bottom.clamp(0, self.h) };
+        if r.right <= r.left || r.bottom <= r.top || bits.is_null() {
+            return Ok(());
+        }
+        let b = D3D11_BOX { left: r.left as u32, top: r.top as u32, front: 0, right: r.right as u32, bottom: r.bottom as u32, back: 1 };
+        self.gpu.ctx.CopySubresourceRegion(staging, 0, r.left as u32, r.top as u32, 0, tex, 0, Some(&b));
+        let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+        self.gpu.ctx.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
+        if !m.pData.is_null() {
+            let n = ((r.right - r.left) * 4) as usize;
+            for y in r.top..r.bottom {
+                let src = (m.pData as *const u8).add(y as usize * m.RowPitch as usize + r.left as usize * 4);
+                let dst = bits.add((y as usize * self.w as usize + r.left as usize) * 4);
+                std::ptr::copy_nonoverlapping(src, dst, n);
+            }
+        }
+        self.gpu.ctx.Unmap(staging, 0);
+        Ok(())
+    }
+
+    /// The DIB's picture, up to the graphics card (before drawing a part
+    /// of a frame into a texture that hasn't seen the rest).
+    unsafe fn upload(&mut self, bits: *const u8) {
+        if let (Some(tex), false) = (self.tex.as_ref(), bits.is_null()) {
+            self.gpu.ctx.UpdateSubresource(tex, 0, None, bits as *const c_void, (self.w * 4) as u32, 0);
+            self.fresh = false;
+        }
+    }
+}
+
+/// What a surface draws with: a software DC render target (`rt`), or a
+/// device context on the graphics card (`card`).
+struct Target {
+    rt: Option<ID2D1DCRenderTarget>,
+    card: Option<Card>,
+    base: ID2D1RenderTarget,
+    brush: ID2D1SolidColorBrush,
+}
+
+fn make_target(hw: bool) -> Result<Target> {
+    unsafe {
+        if hw {
+            // (ISLET_GPU_FAIL: developer aid — as if no graphics card could be used.)
+            if std::env::var("ISLET_GPU_FAIL").is_ok() {
+                return Err(Error::from(E_FAIL));
+            }
+            let gpu = gpu()?;
+            let dcx = gpu.d2.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+            let base: ID2D1RenderTarget = dcx.cast()?;
+            base.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            let brush = base.CreateSolidColorBrush(&rgb(0, 1.0), None)?;
+            return Ok(Target { rt: None, card: Some(Card { gpu, dcx, tex: None, staging: None, target: None, w: 0, h: 0, fresh: true }), base, brush });
+        }
         let props = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: if hw { D2D1_RENDER_TARGET_TYPE_HARDWARE } else { D2D1_RENDER_TARGET_TYPE_SOFTWARE },
+            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
             dpiX: 96.0,
             dpiY: 96.0,
@@ -220,27 +400,26 @@ fn make_target(hw: bool) -> Result<(ID2D1DCRenderTarget, ID2D1RenderTarget, ID2D
         let base: ID2D1RenderTarget = rt.cast()?;
         base.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         let brush = base.CreateSolidColorBrush(&rgb(0, 1.0), None)?;
-        Ok((rt, base, brush))
+        Ok(Target { rt: Some(rt), card: None, base, brush })
     }
 }
 
-/// The target for a new surface (or one whose kind changed): hardware if
-/// that is the kind now and it can be made, else software.
-fn current_target() -> Result<(ID2D1DCRenderTarget, ID2D1RenderTarget, ID2D1SolidColorBrush, bool, u32)> {
+/// The target for a new surface (or one whose kind changed): on the
+/// graphics card if that is the kind now and it can be made, else software.
+fn current_target() -> Result<(Target, bool, u32)> {
     if !CHOSEN.load(Relaxed) {
         apply_setting();
     }
     if hardware() {
         match make_target(true) {
-            Ok((rt, base, brush)) => return Ok((rt, base, brush, true, GEN.load(Relaxed))),
+            Ok(t) => return Ok((t, true, GEN.load(Relaxed))),
             Err(e) => {
                 CALIB.with(|c| c.borrow_mut().phase = 4);
                 set_kind(false, &format!("the graphics card can't be used: {e}"));
             }
         }
     }
-    let (rt, base, brush) = make_target(false)?;
-    Ok((rt, base, brush, false, GEN.load(Relaxed)))
+    Ok((make_target(false)?, false, GEN.load(Relaxed)))
 }
 
 /// The UI-thread graphics factories.
@@ -677,7 +856,12 @@ fn round_corners(px: &mut [u8], w: u32, h: u32, r: f32) {
 // ---------------------------------------------------------------------------
 
 pub struct Surface {
-    rt: ID2D1DCRenderTarget,
+    /// The software target (None on the graphics card: see `card`).
+    rt: Option<ID2D1DCRenderTarget>,
+    /// This surface's picture on the graphics card.
+    card: Option<Card>,
+    /// The part being drawn (pixels), in a frame begun with `begin_part`.
+    part: std::cell::Cell<Option<RECT>>,
     base: ID2D1RenderTarget,
     brush: ID2D1SolidColorBrush,
     /// `rt` is a hardware target, made for this generation (see `GEN`).
@@ -687,6 +871,15 @@ pub struct Surface {
     began: std::cell::Cell<Option<std::time::Instant>>,
     /// The frame being drawn has failed already (see `end`).
     broken: std::cell::Cell<bool>,
+    /// The clips pushed and not popped yet, each with the transform it was
+    /// pushed under: a frame must end with none left (Direct2D fails the
+    /// whole frame otherwise), and ending a frame in the middle (see
+    /// `backdrop_blur`) has to take them off and put them back.
+    clips: RefCell<Vec<(D2D_RECT_F, windows_numerics::Matrix3x2)>>,
+    /// The blurred band kept by `backdrop_blur`.
+    blur: RefCell<Option<Blurred>>,
+    /// How long the last whole frame took to draw (µs).
+    pub last_cost: std::cell::Cell<u32>,
     round_cap: ID2D1StrokeStyle,
     dash: ID2D1StrokeStyle,
     dc: HDC,
@@ -699,6 +892,22 @@ pub struct Surface {
     /// A line too long for its place scrolls (see `text`): seconds until the
     /// next frame it needs (0: right away), the soonest of this frame's.
     marquee: std::cell::Cell<Option<f32>>,
+    /// Where this frame's scrolling lines are (DIPs, as drawn): a window
+    /// can draw just that again for their next frame.
+    mq_area: std::cell::Cell<Option<D2D_RECT_F>>,
+}
+
+/// A blurred band of a surface's picture (see `backdrop_blur`).
+struct Blurred {
+    gen: u32,
+    w: i32,
+    h: i32,
+    scale: f32,
+    x0: i32,
+    y0: i32,
+    y1: i32,
+    made: std::time::Instant,
+    bmp: ID2D1Bitmap,
 }
 
 /// Long lines that don't fit scroll sideways: still for a moment, then slowly
@@ -710,15 +919,16 @@ const MQ_SPEED: f32 = 30.0;
 thread_local! {
     /// Natural width of (format, text).
     static MQ_W: RefCell<std::collections::HashMap<(usize, String), f32>> = RefCell::new(std::collections::HashMap::new());
-    /// When each scrolling line was first seen (and last).
-    static MQ_T: RefCell<std::collections::HashMap<u64, (std::time::Instant, std::time::Instant)>> = RefCell::new(std::collections::HashMap::new());
+    /// Each scrolling line, by where it is drawn: when it started, when it
+    /// was last seen, and what it said.
+    static MQ_T: RefCell<std::collections::HashMap<u64, (std::time::Instant, std::time::Instant, String)>> = RefCell::new(std::collections::HashMap::new());
 }
 
 impl Surface {
     pub fn new() -> Result<Surface> {
         let g = g();
         unsafe {
-            let (rt, base, brush, hw, gen) = current_target()?;
+            let (Target { rt, card, base, brush }, hw, gen) = current_target()?;
             let dc = CreateCompatibleDC(None);
             let caps = D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_ROUND,
@@ -733,12 +943,17 @@ impl Surface {
             let dash = g.d2d.CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES { dashStyle: D2D1_DASH_STYLE_DASH, ..caps }, None)?;
             Ok(Surface {
                 rt,
+                card,
+                part: std::cell::Cell::new(None),
                 base,
                 brush,
                 hw,
                 gen,
                 began: std::cell::Cell::new(None),
                 broken: std::cell::Cell::new(false),
+                clips: RefCell::new(Vec::new()),
+                blur: RefCell::new(None),
+                last_cost: std::cell::Cell::new(0),
                 round_cap,
                 dash,
                 dc,
@@ -749,6 +964,7 @@ impl Surface {
                 h: 0,
                 scale: 1.0,
                 marquee: std::cell::Cell::new(None),
+                mq_area: std::cell::Cell::new(None),
             })
         }
     }
@@ -760,8 +976,9 @@ impl Surface {
             return true;
         }
         match current_target() {
-            Ok((rt, base, brush, hw, gen)) => {
+            Ok((Target { rt, card, base, brush }, hw, gen)) => {
                 self.rt = rt;
+                self.card = card;
                 self.base = base;
                 self.brush = brush;
                 self.hw = hw;
@@ -821,14 +1038,27 @@ impl Surface {
         }
         self.scale = scale;
         self.marquee.set(None);
+        self.mq_area.set(None);
         self.broken.set(false);
+        self.clips.borrow_mut().clear();
         self.began.set(Some(std::time::Instant::now()));
+        self.part.set(None);
         unsafe {
             let r = RECT { left: 0, top: 0, right: self.w, bottom: self.h };
-            if let Err(e) = self.rt.BindDC(self.dc, &r) {
-                if self.hw {
-                    hardware_failed(&e, false);
+            if let Some(card) = self.card.as_mut() {
+                if let Err(e) = card.ensure(r.right, r.bottom) {
+                    hardware_failed(&e, true);
+                    return false;
                 }
+                if let Some(t) = card.target.as_ref() {
+                    card.dcx.SetTarget(t);
+                }
+                card.fresh = false;
+            } else if let Some(rt) = self.rt.as_ref() {
+                if rt.BindDC(self.dc, &r).is_err() {
+                    return false;
+                }
+            } else {
                 return false;
             }
             self.base.SetDpi(96.0 * scale, 96.0 * scale);
@@ -850,7 +1080,9 @@ impl Surface {
         }
         self.scale = scale;
         self.marquee.set(None);
+        self.mq_area.set(None);
         self.broken.set(false);
+        self.clips.borrow_mut().clear();
         self.began.set(None);
         let r = RECT {
             left: ((part.left * scale).floor() as i32).clamp(0, self.w),
@@ -861,11 +1093,30 @@ impl Surface {
         if r.right <= r.left || r.bottom <= r.top {
             return false;
         }
+        self.part.set(None);
         unsafe {
-            if let Err(e) = self.rt.BindDC(self.dc, &r) {
-                if self.hw {
-                    hardware_failed(&e, false);
+            if let Some(card) = self.card.as_mut() {
+                // On the graphics card: the whole picture is there; a clip
+                // keeps the drawing to the part, and only the part comes back.
+                if let Err(e) = card.ensure(self.w, self.h) {
+                    hardware_failed(&e, true);
+                    return false;
                 }
+                if card.fresh {
+                    card.upload(self.bits);
+                }
+                if let Some(t) = card.target.as_ref() {
+                    card.dcx.SetTarget(t);
+                }
+                self.base.SetDpi(96.0 * scale, 96.0 * scale);
+                self.base.BeginDraw();
+                self.base.SetTransform(&windows_numerics::Matrix3x2::identity());
+                self.base.PushAxisAlignedClip(&Self::part_dips(r, scale), D2D1_ANTIALIAS_MODE_ALIASED);
+                self.part.set(Some(r));
+                return true;
+            }
+            let Some(rt) = self.rt.as_ref() else { return false };
+            if rt.BindDC(self.dc, &r).is_err() {
                 return false;
             }
             self.base.SetDpi(96.0 * scale, 96.0 * scale);
@@ -876,11 +1127,43 @@ impl Surface {
         true
     }
 
+    /// A part's rectangle in pixels, as DIPs.
+    fn part_dips(r: RECT, scale: f32) -> D2D_RECT_F {
+        D2D_RECT_F { left: r.left as f32 / scale, top: r.top as f32 / scale, right: r.right as f32 / scale, bottom: r.bottom as f32 / scale }
+    }
+
+    /// On the graphics card: end the frame there and bring `what` of it
+    /// (pixels; None: the part being drawn, or all of it) into the DIB.
+    unsafe fn card_end(&self, what: Option<RECT>) -> Result<()> {
+        let Some(card) = self.card.as_ref() else { return Err(Error::from(E_FAIL)) };
+        if self.part.get().is_some() {
+            // (The part's clip, under the plain transform it was pushed with.)
+            self.base.PopAxisAlignedClip();
+        }
+        self.base.EndDraw(None, None)?;
+        let all = RECT { left: 0, top: 0, right: self.w, bottom: self.h };
+        card.read_back(what.or(self.part.get()).unwrap_or(all), self.bits)
+    }
+
     /// The frame is finished (and, from a hardware target, copied into the
     /// DIB). False: it failed and what's in the DIB isn't a picture — draw
     /// it again (the next try uses a new target, or the processor).
     pub fn end(&self) -> bool {
-        let r = unsafe { self.base.EndDraw(None, None) };
+        // (Clips left on: a mistake in the drawing code, not in the frame.)
+        let left = self.lift_clips();
+        if left > 0 {
+            self.clips.borrow_mut().clear();
+            note_unbalanced("clips were left on at the end of a frame", self.w, self.h);
+        }
+        let r = unsafe {
+            if self.hw {
+                let r = self.card_end(None);
+                self.part.set(None);
+                r
+            } else {
+                self.base.EndDraw(None, None)
+            }
+        };
         let began = self.began.take();
         match r {
             Ok(()) if !self.broken.get() => {
@@ -900,14 +1183,18 @@ impl Surface {
                     FAILS.store(0, Relaxed);
                 }
                 if let Some(t) = began {
-                    calibrate(self.w as i64 * self.h as i64, t.elapsed().as_micros() as u64);
+                    let us = t.elapsed().as_micros() as u64;
+                    self.last_cost.set(us.min(u32::MAX as u64) as u32);
+                    calibrate(self.w as i64 * self.h as i64, us);
                 }
                 true
             }
             Ok(()) => false,
             Err(e) => {
                 if self.hw {
-                    hardware_failed(&e, e.code() == D2DERR_RECREATE_TARGET);
+                    // (Unbalanced clips are this program's mistake; anything
+                    // else: the device may be gone — start it again.)
+                    hardware_failed(&e, e.code() != D2DERR_PUSH_POP_UNBALANCED);
                 } else if e.code() == D2DERR_RECREATE_TARGET {
                     GEN.fetch_add(1, Relaxed);
                 }
@@ -1188,6 +1475,11 @@ impl Surface {
         self.marquee.take()
     }
 
+    /// The rectangle (DIPs) around every line that is scrolling right now.
+    pub fn marquee_area(&self) -> Option<D2D_RECT_F> {
+        self.mq_area.get()
+    }
+
     /// A one-line text longer than its place: instead of "…", it scrolls to
     /// show the rest. Returns false when it fits (drawn the usual way).
     fn marquee_text(&self, s: &str, w: &[u16], f: &IDWriteTextFormat, r: D2D_RECT_F, c: D2D1_COLOR_F) -> bool {
@@ -1218,21 +1510,36 @@ impl Surface {
             return false;
         }
         use std::hash::{Hash, Hasher};
+        // A line is the place it is drawn in, not what it says: a number
+        // in it ticking over ("working set 98 MB" → "99 MB") must not send
+        // it back to its start once a second.
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        s.hash(&mut h);
-        (rw as i32).hash(&mut h);
+        let mut m = windows_numerics::Matrix3x2::identity();
+        unsafe { self.base.GetTransform(&mut m) };
+        ((r.left + m.M31).round() as i32, (r.top + m.M32).round() as i32, rw as i32, self.w, self.h).hash(&mut h);
         (f.as_raw() as usize).hash(&mut h);
         let id = h.finish();
         let now = std::time::Instant::now();
         let start = MQ_T.with(|m| {
             let mut m = m.borrow_mut();
             if m.len() > 300 {
-                m.retain(|_, (_, seen)| now.duration_since(*seen).as_secs_f32() < 10.0);
+                m.retain(|_, (_, seen, _)| now.duration_since(*seen).as_secs_f32() < 10.0);
             }
-            let e = m.entry(id).or_insert((now, now));
-            // Gone from sight for a while: starts over from the beginning.
-            if now.duration_since(e.1).as_secs_f32() > MQ_PAUSE + 3.0 {
+            let e = m.entry(id).or_insert_with(|| (now, now, s.to_string()));
+            // Gone from sight for a while, or a different line altogether
+            // in this place (not just a few characters of it): from the
+            // beginning.
+            let same = e.2 == s || {
+                let n = e.2.chars().count().max(s.chars().count()).max(1);
+                let head = e.2.chars().zip(s.chars()).take_while(|(a, b)| a == b).count();
+                let tail = e.2.chars().rev().zip(s.chars().rev()).take_while(|(a, b)| a == b).count();
+                (head + tail) * 10 >= n * 6
+            };
+            if now.duration_since(e.1).as_secs_f32() > MQ_PAUSE + 3.0 || !same {
                 e.0 = now;
+            }
+            if e.2 != s {
+                e.2 = s.to_string();
             }
             e.1 = now;
             e.0
@@ -1252,8 +1559,22 @@ impl Surface {
             let Ok(l) = g().dw.CreateTextLayout(w, f, natural + 8.0, (r.bottom - r.top).max(1.0)) else { return false };
             let _ = l.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
             self.base.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_ALIASED);
-            self.base.DrawTextLayout(windows_numerics::Vector2 { X: r.left - off.round(), Y: r.top }, &l, self.b(c), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            // While it glides: exactly where the clock says, between pixels
+            // too (NO_SNAP) — snapped to whole pixels, slow text moves in
+            // uneven little steps, which is what showed as judder. At rest
+            // (the pauses at either end) it sits on the pixels, crisp.
+            let moving = wake <= 0.0;
+            let (off, how) = if moving { (off, D2D1_DRAW_TEXT_OPTIONS_NO_SNAP) } else { ((off * self.scale).round() / self.scale.max(0.01), D2D1_DRAW_TEXT_OPTIONS_NONE) };
+            self.base.DrawTextLayout(windows_numerics::Vector2 { X: r.left - off, Y: r.top }, &l, self.b(c), how);
             self.base.PopAxisAlignedClip();
+            // (Where it is, for drawing just this again.)
+            let mut m = windows_numerics::Matrix3x2::identity();
+            self.base.GetTransform(&mut m);
+            let q = D2D_RECT_F { left: r.left + m.M31, top: r.top + m.M32, right: r.right + m.M31, bottom: r.bottom + m.M32 };
+            self.mq_area.set(Some(match self.mq_area.get() {
+                Some(a) => D2D_RECT_F { left: a.left.min(q.left), top: a.top.min(q.top), right: a.right.max(q.right), bottom: a.bottom.max(q.bottom) },
+                None => q,
+            }));
         }
         true
     }
@@ -1367,60 +1688,88 @@ impl Surface {
 
     /// Frosted glass: what's already drawn under `r` (DIPs), blurred
     /// (`radius` DIPs), shown inside a rounded rectangle.
+    ///
+    /// Reading the picture back and blurring it is the dearest thing a
+    /// frame can do (on the graphics card the frame has to be ended and
+    /// brought back first), and a panel that slides in and grows asks for
+    /// it on every frame. So a whole band — the surface's width, a little
+    /// taller than `r` — is blurred once and kept for a third of a second:
+    /// frames in between reuse it, wherever in the band the panel is.
     pub fn backdrop_blur(&self, r: D2D_RECT_F, corner: f32, radius: f32, opacity: f32) {
         if self.bits.is_null() {
             return;
         }
         let sc = self.scale;
-        let x0 = ((r.left * sc).floor() as i32).clamp(0, self.w);
-        let y0 = ((r.top * sc).floor() as i32).clamp(0, self.h);
-        let x1 = ((r.right * sc).ceil() as i32).clamp(0, self.w);
-        let y1 = ((r.bottom * sc).ceil() as i32).clamp(0, self.h);
-        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
-        if w < 4 || h < 4 {
-            return;
-        }
-        unsafe {
-            // What's been drawn so far, into the bitmap. A hardware target
-            // only copies its picture there when the frame ends: end it
-            // here and begin again (the picture, the transform and the
-            // DIB all stay as they are).
-            if self.hw {
-                if let Err(e) = self.base.EndDraw(None, None) {
-                    self.broken.set(true);
-                    hardware_failed(&e, e.code() == D2DERR_RECREATE_TARGET);
-                    self.base.BeginDraw();
-                    return;
-                }
-                self.base.BeginDraw();
-            } else {
-                let _ = self.base.Flush(None, None);
+        let gen = GEN.load(Relaxed);
+        let px = |v: f32| (v * sc).round() as i32;
+        let (ry0, ry1) = (px(r.top).clamp(0, self.h), px(r.bottom).clamp(0, self.h));
+        let fresh = self.blur.borrow().as_ref().map(|b| b.gen == gen && b.w == self.w && b.h == self.h && b.scale == sc && ry0 >= b.y0 && ry1 <= b.y1 && b.made.elapsed().as_millis() < 330).unwrap_or(false);
+        let _d = crate::util::diag::Span::new("blur.draw");
+        if !fresh {
+            let _d = crate::util::diag::Span::new("blur.make");
+            let margin = px(14.0);
+            let (x0, x1) = (0, self.w);
+            let (y0, y1) = ((ry0 - margin).clamp(0, self.h), (ry1 + margin).clamp(0, self.h));
+            let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+            if w < 4 || h < 4 {
+                return;
             }
-        }
-        let src = unsafe { std::slice::from_raw_parts(self.bits, (self.w * self.h * 4) as usize) };
-        let stride = self.w as usize * 4;
-        let mut buf = vec![0u8; w * h * 4];
-        for y in 0..h {
-            let s0 = (y0 as usize + y) * stride + x0 as usize * 4;
-            buf[y * w * 4..(y + 1) * w * 4].copy_from_slice(&src[s0..s0 + w * 4]);
-        }
-        // Three box blurs ≈ a gaussian.
-        let rad = ((radius * sc) / 2.0).round().max(1.0) as usize;
-        let mut tmp = vec![0u8; buf.len()];
-        for _ in 0..3 {
-            box_blur(&buf, &mut tmp, w, h, rad, true);
-            box_blur(&tmp, &mut buf, w, h, rad, false);
-        }
-        unsafe {
+            unsafe {
+                // What's been drawn so far, into the bitmap. A hardware
+                // target only copies its picture there when the frame ends:
+                // end it here and begin again (the picture, the transform
+                // and the DIB all stay as they are).
+                if self.hw {
+                    self.lift_clips();
+                    // (Only the band comes back from the graphics card.)
+                    let band = RECT { left: x0, top: y0, right: x1, bottom: y1 };
+                    let r = self.card_end(Some(band));
+                    self.base.BeginDraw();
+                    if let Some(p) = self.part.get() {
+                        let mut now = windows_numerics::Matrix3x2::identity();
+                        self.base.GetTransform(&mut now);
+                        self.base.SetTransform(&windows_numerics::Matrix3x2::identity());
+                        self.base.PushAxisAlignedClip(&Self::part_dips(p, sc), D2D1_ANTIALIAS_MODE_ALIASED);
+                        self.base.SetTransform(&now);
+                    }
+                    self.restore_clips();
+                    if let Err(e) = r {
+                        self.broken.set(true);
+                        hardware_failed(&e, e.code() != D2DERR_PUSH_POP_UNBALANCED);
+                        return;
+                    }
+                } else {
+                    let _ = self.base.Flush(None, None);
+                }
+            }
+            let src = unsafe { std::slice::from_raw_parts(self.bits, (self.w * self.h * 4) as usize) };
+            let stride = self.w as usize * 4;
+            let mut buf = vec![0u8; w * h * 4];
+            for y in 0..h {
+                let s0 = (y0 as usize + y) * stride + x0 as usize * 4;
+                buf[y * w * 4..(y + 1) * w * 4].copy_from_slice(&src[s0..s0 + w * 4]);
+            }
+            // Three box blurs ≈ a gaussian.
+            let rad = ((radius * sc) / 2.0).round().max(1.0) as usize;
+            let mut tmp = vec![0u8; buf.len()];
+            for _ in 0..3 {
+                box_blur(&buf, &mut tmp, w, h, rad, true);
+                box_blur(&tmp, &mut buf, w, h, rad, false);
+            }
             let props = D2D1_BITMAP_PROPERTIES {
                 pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
                 dpiX: 96.0 * sc,
                 dpiY: 96.0 * sc,
             };
-            let Ok(bmp) = self.base.CreateBitmap(D2D_SIZE_U { width: w as u32, height: h as u32 }, Some(buf.as_ptr() as *const _), (w * 4) as u32, &props) else { return };
-            let Ok(brush) = self.base.CreateBitmapBrush(&bmp, None, None) else { return };
+            let Ok(bmp) = (unsafe { self.base.CreateBitmap(D2D_SIZE_U { width: w as u32, height: h as u32 }, Some(buf.as_ptr() as *const _), (w * 4) as u32, &props) }) else { return };
+            *self.blur.borrow_mut() = Some(Blurred { gen, w: self.w, h: self.h, scale: sc, x0, y0, y1, made: std::time::Instant::now(), bmp });
+        }
+        let b = self.blur.borrow();
+        let Some(b) = b.as_ref() else { return };
+        unsafe {
+            let Ok(brush) = self.base.CreateBitmapBrush(&b.bmp, None, None) else { return };
             brush.SetOpacity(opacity);
-            brush.SetTransform(&windows_numerics::Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: x0 as f32 / sc, M32: y0 as f32 / sc });
+            brush.SetTransform(&windows_numerics::Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: b.x0 as f32 / sc, M32: b.y0 as f32 / sc });
             let rr = D2D1_ROUNDED_RECT { rect: r, radiusX: corner, radiusY: corner };
             self.base.FillRoundedRectangle(&rr, &brush);
         }
@@ -1438,10 +1787,41 @@ impl Surface {
     }
 
     pub fn clip(&self, r: D2D_RECT_F) {
-        unsafe { self.base.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_ALIASED) }
+        unsafe {
+            let mut m = windows_numerics::Matrix3x2::identity();
+            self.base.GetTransform(&mut m);
+            self.clips.borrow_mut().push((r, m));
+            self.base.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_ALIASED)
+        }
     }
     pub fn unclip(&self) {
+        // (One pop too many would fail the whole frame.)
+        if self.clips.borrow_mut().pop().is_none() {
+            note_unbalanced("a clip was taken off that was never put on", self.w, self.h);
+            return;
+        }
         unsafe { self.base.PopAxisAlignedClip() }
+    }
+
+    /// Take every clip off (before ending a frame) …
+    fn lift_clips(&self) -> usize {
+        let n = self.clips.borrow().len();
+        for _ in 0..n {
+            unsafe { self.base.PopAxisAlignedClip() }
+        }
+        n
+    }
+    /// … and put them back, each under the transform it had.
+    fn restore_clips(&self) {
+        unsafe {
+            let mut now = windows_numerics::Matrix3x2::identity();
+            self.base.GetTransform(&mut now);
+            for (r, m) in self.clips.borrow().iter() {
+                self.base.SetTransform(m);
+                self.base.PushAxisAlignedClip(r, D2D1_ANTIALIAS_MODE_ALIASED);
+            }
+            self.base.SetTransform(&now);
+        }
     }
 
     /// Soft drop shadow faked with a few translucent rounded rects (software
@@ -1592,4 +1972,161 @@ fn box_blur(src: &[u8], dst: &mut [u8], w: usize, h: usize, r: usize, rows: bool
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Self-test (Phemio.exe --gfx-test)
+// ---------------------------------------------------------------------------
+
+/// Draws the same pictures with the graphics card and with the processor —
+/// plain shapes and text, clips, the frosted panel (which ends a frame in
+/// the middle), a part of a frame, a picture — and reports for each whether
+/// it worked, whether the two came out alike, and how long frames take.
+/// Needs no window. The report goes to `gfx-test.txt` in the data folder.
+pub fn self_test() -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "Phemio {} graphics self-test", env!("CARGO_PKG_VERSION"));
+    CHOSEN.store(true, Relaxed);
+    CALIB.with(|c| c.borrow_mut().phase = 0);
+    let font = g().font("Segoe UI", 15.0, 400, 0);
+    let icon = Image::from_bytes(include_bytes!("../assets/phemio-256.png"), 96, 0.0).ok();
+
+    // One frame of a made-up island: `step` moves things a little.
+    fn scene(s: &mut Surface, scale: f32, step: u32, what: u32, font: &IDWriteTextFormat, icon: Option<&Image>) -> bool {
+        if !s.begin(scale) {
+            return false;
+        }
+        let (w, h) = (s.dip_w(), s.dip_h());
+        let t = step as f32;
+        s.fill_rr(rf(0.0, 0.0, w, h), 28.0, rgb(0x101014, 1.0));
+        s.fill_rr_grad(rf(12.0, 12.0, w - 24.0, 60.0), 14.0, rgb(0x22c8ff, 0.9), rgb(0x0a5a8a, 0.9));
+        for i in 0..24 {
+            let x = 16.0 + (i % 8) as f32 * (w - 40.0) / 8.0;
+            let y = 90.0 + (i / 8) as f32 * 44.0;
+            s.fill_rr(rf(x, y, 36.0, 36.0), 9.0, rgb(0x2a2a30 + i * 0x050301, 1.0));
+            s.text("Abc 123", font, rf(x, y + 8.0, 60.0, 20.0), rgb(0xffffff, 0.9));
+        }
+        s.fill_circle(40.0 + t, 42.0, 14.0, rgb(0xff453a, 1.0));
+        if let Some(i) = icon {
+            s.image(i, rf(w - 80.0, 16.0, 52.0, 52.0), 1.0);
+        }
+        s.text("The quick brown fox jumps over the lazy dog — 0123456789", font, rf(70.0, 30.0, w - 170.0, 22.0), rgb(0xffffff, 1.0));
+        if what >= 1 {
+            // Clips, nested, with a transform in between.
+            s.clip(rf(20.0, 80.0, w - 40.0, h - 100.0));
+            s.scale_about(w / 2.0, h / 2.0, 1.0);
+            s.clip(rf(40.0, 100.0, w - 80.0, 80.0));
+            s.fill_rect(rf(0.0, 0.0, w, h), rgb(0x30d158, 0.25));
+            if what >= 2 {
+                // The frosted panel, inside both clips.
+                s.backdrop_blur(rf(60.0, 104.0 + t * 0.2, w - 120.0, 56.0), 28.0, 18.0, 1.0);
+                s.fill_rr(rf(60.0, 104.0 + t * 0.2, w - 120.0, 56.0), 28.0, rgb(0x1c1c1e, 0.6));
+            }
+            s.unclip();
+            s.reset_scale();
+            s.fill_rect(rf(0.0, h - 30.0, w, 30.0), rgb(0xffd60a, 0.3));
+            s.unclip();
+        }
+        s.end()
+    }
+
+    let sizes: [(&str, i32, i32, f32); 2] = [("island", 870, 420, 1.5), ("settings", 2094, 1692, 1.5)];
+    let names = ["plain", "clips", "frosted panel", "part of a frame"];
+    let mut shots: Vec<Vec<Option<Vec<u8>>>> = Vec::new();
+    for hw in [true, false] {
+        let kind = if hw { "graphics card" } else { "processor" };
+        HARDWARE.store(hw, Relaxed);
+        FAILS.store(0, Relaxed);
+        GEN.fetch_add(1, Relaxed);
+        let mut mine: Vec<Option<Vec<u8>>> = Vec::new();
+        let Ok(mut s) = Surface::new() else {
+            let _ = writeln!(out, "{kind}: no surface could be made");
+            shots.push(mine);
+            continue;
+        };
+        if s.hw != hw {
+            let _ = writeln!(out, "{kind}: NOT AVAILABLE (a {} target was made instead)", if s.hw { "hardware" } else { "software" });
+            shots.push(mine);
+            continue;
+        }
+        s.resize(sizes[0].1, sizes[0].2);
+        for (i, name) in names.iter().enumerate() {
+            let ok = if i < 3 {
+                scene(&mut s, 1.5, 3, i as u32, &font, icon.as_ref())
+            } else {
+                // A whole frame, then only a strip of it drawn again.
+                let a = scene(&mut s, 1.5, 3, 1, &font, icon.as_ref());
+                let b = s.begin_part(1.5, rf(0.0, 100.0, 580.0, 40.0));
+                if b {
+                    s.fill_rect(rf(0.0, 100.0, 580.0, 40.0), rgb(0x0a84ff, 1.0));
+                    s.text("part", &font, rf(20.0, 108.0, 200.0, 20.0), rgb(0xffffff, 1.0));
+                }
+                a && b && s.end()
+            };
+            let px = unsafe { std::slice::from_raw_parts(s.bits, (s.w * s.h * 4) as usize) }.to_vec();
+            let lit = px.chunks_exact(4).filter(|p| p[3] != 0).count();
+            let still = s.hw == hw && hardware() == hw && s.gen == GEN.load(Relaxed);
+            let _ = writeln!(out, "{kind}: {name}: {}{} ({} of {} pixels drawn)", if ok { "ok" } else { "FAILED" }, if still { "" } else { " — and the target was given up" }, lit, px.len() / 4);
+            mine.push(if ok { Some(px) } else { None });
+            if !still {
+                // (Carry on with a new target of the kind being tested.)
+                HARDWARE.store(hw, Relaxed);
+                FAILS.store(0, Relaxed);
+                GEN.fetch_add(1, Relaxed);
+            }
+        }
+        // How long frames take (the picture moves a little each frame).
+        for (label, w, h, sc) in sizes {
+            s.resize(w, h);
+            for what in [1u32, 2] {
+                let mut times: Vec<f32> = Vec::new();
+                let mut failed = 0;
+                for step in 0..60u32 {
+                    let t = std::time::Instant::now();
+                    if !scene(&mut s, sc, step, what, &font, icon.as_ref()) {
+                        failed += 1;
+                        HARDWARE.store(hw, Relaxed);
+                        FAILS.store(0, Relaxed);
+                    }
+                    times.push(t.elapsed().as_secs_f32() * 1000.0);
+                }
+                let first = times[0];
+                let mut rest = times[5..].to_vec();
+                rest.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let _ = writeln!(
+                    out,
+                    "{kind}: {label} {w}×{h}{}: median {:.2} ms, slowest {:.2} ms, first frame {:.2} ms{}",
+                    if what == 2 { " with the frosted panel" } else { "" },
+                    rest[rest.len() / 2],
+                    rest[rest.len() - 1],
+                    first,
+                    if failed > 0 { format!(", {failed} FAILED") } else { String::new() }
+                );
+            }
+        }
+        shots.push(mine);
+    }
+    // Alike?
+    if shots.len() == 2 {
+        for (i, name) in names.iter().enumerate() {
+            match (shots[0].get(i).and_then(|x| x.as_ref()), shots[1].get(i).and_then(|x| x.as_ref())) {
+                (Some(a), Some(b)) if a.len() == b.len() => {
+                    let (mut far, mut worst) = (0usize, 0u8);
+                    for (p, q) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+                        let d = (0..4).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0);
+                        worst = worst.max(d);
+                        if d > 40 {
+                            far += 1;
+                        }
+                    }
+                    let _ = writeln!(out, "alike: {name}: {far} of {} pixels differ clearly (biggest difference {worst} of 255)", a.len() / 4);
+                }
+                _ => {
+                    let _ = writeln!(out, "alike: {name}: not compared (one of the two failed)");
+                }
+            }
+        }
+    }
+    out
 }

@@ -306,6 +306,12 @@
  "Looking for more networks…": "Recherche d'autres réseaux…",
  "Draw with the graphics card": "Dessiner avec la carte graphique",
  "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one": "Animations plus fluides et processeur moins sollicité ; utilise plus de mémoire. Phemio mesure les deux méthodes une fois et garde la plus rapide",
+ "Upload speed": "Vitesse d'envoi",
+ "Network, sent": "Réseau, envoyé",
+ "Download speed": "Vitesse de réception",
+ "Network, received": "Réseau, reçu",
+ "Disk read": "Lecture disque",
+ "Disk write": "Écriture disque",
  "Looking…": "Recherche…",
  "No other PC found": "Aucun autre PC trouvé",
  "Low battery": "Batterie faible",
@@ -881,5 +887,5 @@
  "The other PC is playing its sound here": "L’autre PC lit son audio ici",
  "Not linked": "Non lié",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "L’autre PC n’a pas accepté le son (il faut Phemio 0.38 ou plus récent, avec « Lire le son des PC liés » activé)",
- "Phemio 0.39.0": "Phemio 0.39.0"
+ "Phemio 0.39.1": "Phemio 0.39.1"
 }

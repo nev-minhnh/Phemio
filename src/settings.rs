@@ -81,6 +81,9 @@ struct Row {
     ctl: Ctl,
     enabled: bool,
     header: bool,
+    /// Set in from the left: a row that belongs to the one above it (an
+    /// item's paddings).
+    indent: f32,
 }
 
 /// Closed island time / date: fonts and styles.
@@ -88,10 +91,10 @@ const FONTS: &[&str] = &["Default", "Segoe UI Variable", "Segoe UI", "Bahnschrif
 const STYLES: &[&str] = &["Default", "Thin", "Regular", "Bold", "Italic", "Bold italic"];
 
 fn row(label: &str, sub: &str, ctl: Ctl, enabled: bool) -> Row {
-    Row { label: label.into(), sub: sub.into(), ctl, enabled, header: false }
+    Row { label: label.into(), sub: sub.into(), ctl, enabled, header: false, indent: 0.0 }
 }
 fn header(label: &str) -> Row {
-    Row { label: label.into(), sub: String::new(), ctl: Ctl::Text(String::new()), enabled: true, header: true }
+    Row { label: label.into(), sub: String::new(), ctl: Ctl::Text(String::new()), enabled: true, header: true, indent: 0.0 }
 }
 
 const TABS: [(&str, &str); 7] = [("General", "\u{E713}"), ("Island", "\u{E7F4}"), ("Pages", "\u{E8A1}"), ("Alerts", "\u{EA8F}"), ("Taskbar", "\u{E9D9}"), ("Transparency", "\u{E790}"), ("About", "\u{E946}")];
@@ -273,14 +276,16 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
             v.push(row("Background corners", "", Ctl::Slider("tbm_bg_r", 0, 20, 1, " px"), t && c.i("tbm_bg") == 0));
             v.push(row("Spacing", "Space between items", Ctl::Slider("tbm_gap", 0, 30, 1, " px"), t));
             v.push(header("Items  (▲▼ reorder · ⋯ padding)"));
+            // (The open paddings belong to an item, not to a place in the
+            // list: they move with it when it is moved up or down.)
             let open = TBM_OPEN.load(Ordering::Relaxed);
             for (i, m) in crate::tbmon::order().into_iter().enumerate() {
-                let (_, _, name, sub) = crate::tbmon::METRICS.iter().find(|x| x.0 == m).copied().unwrap();
+                let (at, &(_, _, name, sub)) = crate::tbmon::METRICS.iter().enumerate().find(|x| x.1 .0 == m).unwrap();
                 v.push(row(name, sub, Ctl::Metric(i), t));
-                if open == i as i32 {
+                if open == at as i32 {
                     let k = crate::tbmon::pad_keys(m);
                     for (j, side) in ["Left padding", "Top padding", "Right padding", "Bottom padding"].iter().enumerate() {
-                        v.push(row(side, "", Ctl::Slider(k[j], -10, 30, 1, " px"), t));
+                        v.push(Row { indent: 28.0, ..row(side, "", Ctl::Slider(k[j], -10, 30, 1, " px"), t) });
                     }
                 }
             }
@@ -304,8 +309,22 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
             v.push(row("Helper log", "What the transparency helper did inside Explorer — useful when something doesn't work", Ctl::Button("Open", Act::GlassLog), true));
         }
         _ => {
-            let (pws, ws, private) = util::memory_mb();
-            v.push(row("Phemio 0.39.0", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
+            // (Asked once a second, not for every frame drawn: the numbers
+            // changed under a line that was scrolling.)
+            let (pws, ws, private) = {
+                thread_local! {
+                    static MEM: std::cell::Cell<Option<(std::time::Instant, (f32, f32, f32))>> = const { std::cell::Cell::new(None) };
+                }
+                match MEM.get() {
+                    Some((t, m)) if t.elapsed().as_millis() < 1000 => m,
+                    _ => {
+                        let m = util::memory_mb();
+                        MEM.set(Some((std::time::Instant::now(), m)));
+                        m
+                    }
+                }
+            };
+            v.push(row("Phemio 0.39.1", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
             v.push(row("Source code", "github.com/nev-minhnh/Phemio · MIT or Apache-2.0", Ctl::Button("Open", Act::Url("https://github.com/nev-minhnh/Phemio")), true));
             let detail = format!("{} · {} {ws:.0} MB · {} {private:.0} MB", tr("Same as Task Manager"), tr("working set"), tr("committed"));
             v.push(row("Memory in use", &detail, Ctl::Text(format!("{pws:.1} MB")), true));
@@ -379,6 +398,8 @@ pub struct Settings {
     caret: bool,
     /// Redraw only this part next paint (the slider being dragged).
     partial: Option<D2D_RECT_F>,
+    /// The scrolling lines' place, asked to be drawn alone (see WM_PAINT).
+    mq_part: Option<D2D_RECT_F>,
     /// Where each row was drawn last (to redraw one alone).
     row_rects: Vec<D2D_RECT_F>,
     /// A dragged slider's setting waiting to be shown on the island.
@@ -550,13 +571,28 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
+            // Only the scrolling lines asked for this frame (nothing else
+            // was invalidated since): draw just them.
+            if let Some(a) = s.mq_part.take() {
+                let sc = s.scale;
+                let within = ps.rcPaint.left as f32 >= (a.left * sc).floor() - 2.0 && ps.rcPaint.top as f32 >= (a.top * sc).floor() - 2.0 && ps.rcPaint.right as f32 <= (a.right * sc).ceil() + 2.0 && ps.rcPaint.bottom as f32 <= (a.bottom * sc).ceil() + 2.0;
+                if within && s.partial.is_none() {
+                    s.partial = Some(a);
+                }
+            }
+            let was_part = s.partial.is_some();
             s.render();
             s.surf.blit(hdc);
             s.surf.debug_dump(hwnd);
             let _ = EndPaint(hwnd, &ps);
             // A long line scrolling: its next frame.
+            // (As often as the display shows frames when drawing is cheap;
+            // never so often that drawing takes more than half the time.)
             if let Some(t) = s.surf.take_marquee() {
-                SetTimer(Some(hwnd), T_MARQUEE, ((t * 1000.0) as u32).max(40), None);
+                // (A frame of just the lines costs next to nothing: every
+                // ~15 ms. A whole window: by what the last one cost.)
+                let gap = if s.marquee_part().is_some() || was_part { 15 } else { (s.surf.last_cost.get() / 500).clamp(15, 45) };
+                SetTimer(Some(hwnd), T_MARQUEE, ((t * 1000.0) as u32).max(gap), None);
             }
             LRESULT(0)
         }
@@ -608,7 +644,18 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 s.tick();
             } else if wp.0 == T_MARQUEE {
                 let _ = KillTimer(Some(hwnd), T_MARQUEE);
-                s.invalidate();
+                // Just the scrolling lines, when they are a small part of
+                // the window (drawing the whole window for each of their
+                // frames is what made them stutter).
+                match s.marquee_part() {
+                    Some(a) => {
+                        s.mq_part = Some(a);
+                        let sc = s.scale;
+                        let r = RECT { left: (a.left * sc).floor() as i32, top: (a.top * sc).floor() as i32, right: (a.right * sc).ceil() as i32, bottom: (a.bottom * sc).ceil() as i32 };
+                        let _ = InvalidateRect(Some(hwnd), Some(&r), false);
+                    }
+                    None => s.invalidate(),
+                }
             } else if wp.0 == T_CARET {
                 s.caret = !s.caret;
                 s.invalidate();
@@ -698,6 +745,7 @@ impl Settings {
                 sel_all: false,
                 caret: true,
                 partial: None,
+                mq_part: None,
                 row_rects: Vec::new(),
                 live_key: None,
                 query: String::new(),
@@ -831,6 +879,18 @@ impl Settings {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
             let _ = UpdateWindow(self.hwnd);
         }
+    }
+
+    /// Where the scrolling lines are, if drawing just that is worth it: in
+    /// the rows' part of the window, and well under half of it.
+    fn marquee_part(&self) -> Option<D2D_RECT_F> {
+        let a = self.surf.marquee_area()?;
+        let (w, h) = (self.surf.dip_w(), self.surf.dip_h());
+        // (Not while the page is still sliding in, nor in the side bar.)
+        if self.anim.page_t < 1.0 || a.left < SIDE || a.top < 64.0 || a.bottom > h || (a.bottom - a.top) > h * 0.4 {
+            return None;
+        }
+        Some(rf((a.left - 2.0).max(SIDE), (a.top - 2.0).max(64.0), (a.right - a.left + 4.0).min(w), a.bottom - a.top + 4.0))
     }
 
     pub fn invalidate(&self) {
@@ -1311,8 +1371,10 @@ impl Settings {
                 }
             }
             Hit::MetricPad(i) => {
+                let Some(&m) = crate::tbmon::order().get(i) else { return };
+                let at = crate::tbmon::METRICS.iter().position(|x| x.0 == m).map(|p| p as i32).unwrap_or(-1);
                 let cur = TBM_OPEN.load(Ordering::Relaxed);
-                TBM_OPEN.store(if cur == i as i32 { -1 } else { i as i32 }, Ordering::Relaxed);
+                TBM_OPEN.store(if cur == at { -1 } else { at }, Ordering::Relaxed);
             }
             Hit::MetricMove(i, d) => {
                 if let Some(&m) = crate::tbmon::order().get(i) {
@@ -1465,6 +1527,9 @@ impl Settings {
                 y += 28.0;
                 continue;
             }
+            // A row that belongs to the one above: set in, with a line down
+            // its left that ties it to its owner.
+            let (cx0, cx, cw) = (cx, cx + r.indent, cw - r.indent);
             // Room the control takes on the right.
             let ctl_w = match &r.ctl {
                 Ctl::Choice(_, opts) => opts.iter().map(|o| gfx::g().measure(tr(o), &self.fonts.seg) + if opts.len() >= 5 { 16.0 } else { 26.0 }).sum::<f32>() + 6.0,
@@ -1492,6 +1557,9 @@ impl Settings {
             } else if part.map(|p| y > p.bottom || y + rh < p.top).unwrap_or(false) {
                 y += rh + 8.0;
                 continue;
+            }
+            if r.indent > 0.0 {
+                self.surf.fill_rr(rf(cx0 + r.indent * 0.45, y - 8.0, 2.0, rh + 8.0), 1.0, with_alpha(accent, 0.45));
             }
             self.surf.fill_rr(rf(cx, y, cw, rh), 12.0, card);
             self.surf.stroke_rr(rf(cx + 0.5, y + 0.5, cw - 1.0, rh - 1.0), 11.5, if dark { rgb(0x22c8ff, 0.07) } else { rgb(0x0d141b, 0.06) }, 1.0);
@@ -1657,7 +1725,7 @@ impl Settings {
                     self.draw_switch(tr, t, self.hot == Some(Hit::MetricToggle(*idx)), a, &pal);
                     {
                         let br = rf(right - 154.0, mid - 14.0, 30.0, 28.0);
-                        let open = TBM_OPEN.load(Ordering::Relaxed) == *idx as i32;
+                        let open = crate::tbmon::order().get(*idx).and_then(|m| crate::tbmon::METRICS.iter().position(|x| x.0 == *m)).map(|p| p as i32) == Some(TBM_OPEN.load(Ordering::Relaxed));
                         let hot = self.hot == Some(Hit::MetricPad(*idx));
                         self.surf.fill_rr(br, 7.0, if open { with_alpha(accent, a) } else { fg(if hot { 0.16 } else { 0.07 } * a) });
                         self.surf.text("\u{E712}", &self.fonts.icon, br, if open { pal.on(a) } else { fg(0.85 * a) });

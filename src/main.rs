@@ -26,6 +26,7 @@ mod gemini;
 mod lunar;
 mod link;
 mod gfx;
+mod gfxbench;
 mod i18n;
 mod island;
 mod multiout;
@@ -1620,6 +1621,16 @@ fn main() {
         // Settings → Link → Allow, run as administrator: add the firewall rule, then go.
         if std::env::args().any(|a| a == "--firewall-allow") {
             link::firewall::allow_elevated();
+            return;
+        }
+
+        // Phemio.exe --gfx-test: try both ways of drawing, write the report, go.
+        // (Or a copy of the program named …gfx-test….exe, to run it by a double click.)
+        let named = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().contains("gfx-test"))).unwrap_or(false);
+        if named || std::env::args().any(|a| a == "--gfx-test") {
+            let report = gfx::self_test() + &gfxbench::run();
+            let _ = std::fs::create_dir_all(config::dir());
+            let _ = std::fs::write(config::dir().join("gfx-test.txt"), &report);
             return;
         }
 

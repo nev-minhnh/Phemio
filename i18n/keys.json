@@ -345,6 +345,12 @@
   "Looking inside files…",
   "Draw with the graphics card",
   "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one",
+  "Upload speed",
+  "Network, sent",
+  "Download speed",
+  "Network, received",
+  "Disk read",
+  "Disk write",
   "Looking…",
   "No other PC found",
   "Low battery",
@@ -353,7 +359,7 @@
   "Lunar calendar",
   "Main",
   "Make main",
-  "Phemio 0.39.0",
+  "Phemio 0.39.1",
   "Mascot",
   "Mascot look",
   "Measuring the delay…",
@@ -1195,6 +1201,12 @@
   "Looking inside files…": "Đang tìm trong nội dung tệp…",
   "Draw with the graphics card": "Vẽ bằng card đồ họa",
   "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one": "Hiệu ứng mượt hơn và nhẹ CPU hơn; tốn thêm bộ nhớ. Phemio đo cả hai cách một lần và giữ cách nhanh hơn",
+  "Upload speed": "Tốc độ tải lên",
+  "Network, sent": "Mạng, gửi đi",
+  "Download speed": "Tốc độ tải xuống",
+  "Network, received": "Mạng, nhận về",
+  "Disk read": "Đọc đĩa",
+  "Disk write": "Ghi đĩa",
   "Looking…": "Đang tìm…",
   "No other PC found": "Không tìm thấy PC nào khác",
   "Low battery": "Pin yếu",
@@ -1568,6 +1580,6 @@
   "↵ copy the answer   ·   scroll to read   ·   ←→ edit   ·   Esc close": "↵ sao chép câu trả lời   ·   cuộn để đọc   ·   ←→ sửa   ·   Esc đóng",
   "↵ open   ·   Ctrl+↵ copy link   ·   ↑↓ choose   ·   ←→ edit   ·   Esc close": "↵ mở   ·   Ctrl+↵ sao chép liên kết   ·   ↑↓ chọn   ·   ←→ sửa   ·   Esc đóng",
   "↵ open   ·   Ctrl+↵ show in folder   ·   ↑↓ choose   ·   ←→ edit   ·   Esc close": "↵ mở   ·   Ctrl+↵ mở thư mục chứa   ·   ↑↓ chọn   ·   ←→ sửa   ·   Esc đóng",
-  "Phemio 0.39.0": "Phemio 0.39.0"
+  "Phemio 0.39.1": "Phemio 0.39.1"
  }
 }

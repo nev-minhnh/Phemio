@@ -1,6 +1,6 @@
 [package]
 name = "phemio"
-version = "0.39.0"
+version = "0.39.1"
 edition = "2021"
 description = "Phemio – Your desktop cameo. A Dynamic Island for Windows 11."
 license = "MIT OR Apache-2.0"
@@ -48,6 +48,9 @@ features = [
   "Win32_Graphics_DirectWrite",
   "Win32_Graphics_Imaging",
   "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
   "Win32_Media_KernelStreaming",

@@ -153,14 +153,57 @@ pub const DEFAULTS: &[(&str, i32)] = &[
     ("tbm_bg_h", 90), // background height, % of the taskbar
     ("tbm_bg_r", 6), // background corner radius, px
     ("tbm_interval", 1), // seconds
-    ("tbm_net", 1),
+    ("tbm_up", 1),
+    ("tbm_down", 1),
     ("tbm_cpu", 1),
     ("tbm_ram", 1),
     ("tbm_spd", 1),
     ("tbm_gpu", 1),
-    ("tbm_dio", 0),
+    ("tbm_drd", 0),
+    ("tbm_dwr", 0),
     ("tbm_dsk", 0),
     ("tbm_npu", 1),
+    // Space around each taskbar item (left, top, right, bottom), px.
+    ("tbm_pad_up_l", 0),
+    ("tbm_pad_up_t", 0),
+    ("tbm_pad_up_r", 0),
+    ("tbm_pad_up_b", 0),
+    ("tbm_pad_down_l", 0),
+    ("tbm_pad_down_t", 0),
+    ("tbm_pad_down_r", 0),
+    ("tbm_pad_down_b", 0),
+    ("tbm_pad_cpu_l", 0),
+    ("tbm_pad_cpu_t", 0),
+    ("tbm_pad_cpu_r", 0),
+    ("tbm_pad_cpu_b", 0),
+    ("tbm_pad_ram_l", 0),
+    ("tbm_pad_ram_t", 0),
+    ("tbm_pad_ram_r", 0),
+    ("tbm_pad_ram_b", 0),
+    ("tbm_pad_spd_l", 0),
+    ("tbm_pad_spd_t", 0),
+    ("tbm_pad_spd_r", 0),
+    ("tbm_pad_spd_b", 0),
+    ("tbm_pad_gpu_l", 0),
+    ("tbm_pad_gpu_t", 0),
+    ("tbm_pad_gpu_r", 0),
+    ("tbm_pad_gpu_b", 0),
+    ("tbm_pad_drd_l", 0),
+    ("tbm_pad_drd_t", 0),
+    ("tbm_pad_drd_r", 0),
+    ("tbm_pad_drd_b", 0),
+    ("tbm_pad_dwr_l", 0),
+    ("tbm_pad_dwr_t", 0),
+    ("tbm_pad_dwr_r", 0),
+    ("tbm_pad_dwr_b", 0),
+    ("tbm_pad_dsk_l", 0),
+    ("tbm_pad_dsk_t", 0),
+    ("tbm_pad_dsk_r", 0),
+    ("tbm_pad_dsk_b", 0),
+    ("tbm_pad_npu_l", 0),
+    ("tbm_pad_npu_t", 0),
+    ("tbm_pad_npu_r", 0),
+    ("tbm_pad_npu_b", 0),
 ];
 
 /// Text settings.
@@ -197,7 +240,7 @@ pub const STR_DEFAULTS: &[(&str, &str)] = &[
     ("tz2_city", "Melbourne"),
     ("tz2_place", "Melbourne, Australia"),
     ("font_custom", ""),
-    ("tbm_order", "net,spd,cpu,ram,gpu,npu,dio,dsk"),
+    ("tbm_order", "up,down,spd,cpu,ram,gpu,npu,drd,dwr,dsk"),
 ];
 
 #[derive(Clone, Debug)]
@@ -242,7 +285,40 @@ impl Config {
                 c.vals.insert(k.to_string(), n);
             }
         }
+        c.migrate();
         c
+    }
+
+    /// Settings from before 0.39.1: "Network ↑ / ↓" and "Disk read / write"
+    /// were one taskbar item each; now each direction is its own.
+    fn migrate(&mut self) {
+        for (old, new) in [("net", ["up", "down"]), ("dio", ["drd", "dwr"])] {
+            if let Some(v) = self.vals.remove(&format!("tbm_{old}")) {
+                for n in new {
+                    self.vals.entry(format!("tbm_{n}")).or_insert(v);
+                }
+            }
+            for side in ["l", "t", "r", "b"] {
+                if let Some(v) = self.vals.remove(&format!("tbm_pad_{old}_{side}")) {
+                    for n in new {
+                        self.vals.entry(format!("tbm_pad_{n}_{side}")).or_insert(v);
+                    }
+                }
+            }
+        }
+        if let Some(o) = self.strs.get("tbm_order").cloned() {
+            if o.split(',').any(|k| matches!(k.trim(), "net" | "dio")) {
+                let n: Vec<&str> = o
+                    .split(',')
+                    .flat_map(|k| match k.trim() {
+                        "net" => vec!["up", "down"],
+                        "dio" => vec!["drd", "dwr"],
+                        k => vec![k],
+                    })
+                    .collect();
+                self.strs.insert("tbm_order".into(), n.join(","));
+            }
+        }
     }
 
     fn save(&self) {

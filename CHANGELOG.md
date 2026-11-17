@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.39.1
+
+**Smoothness, measured on a real PC and fixed where the time went.**
+
+Drawing
+- **Frames are drawn on a Direct3D surface.** 0.39.0's hardware target never ran on real hardware
+  (a frame that ended inside a clip failed, and Phemio fell back to the processor), and once that
+  was fixed it measured no faster than the processor: its cost was the DC it draws through, not
+  the drawing. Now Direct2D draws straight into a Direct3D 11 texture and the finished frame — or
+  only the part that was drawn — is copied into the window's bitmap. Measured on that PC: the
+  pieces of a frame take 0.1–1 ms whatever the window's size (an empty Settings window alone took
+  over 9 ms before), and copying a frame back about 1 ms. How windows are shown is unchanged.
+  Self-timing, the automatic fallback to the processor and the setting work as in 0.39.0.
+- **Clips are kept track of.** A frame can no longer fail because a clip was left on (or taken
+  off twice); `phemio.log` names the surface if drawing code ever does that.
+- **The frosted panel behind the page icons is made once**, for a band a little taller than the
+  panel, and reused while the panel slides in — not blurred again for every frame.
+- **`Phemio.exe --gfx-test`** draws test pictures both ways, compares them, times the pieces of a
+  frame and writes `gfx-test.txt` to the data folder.
+
+Scrolling text
+- **Glides between pixels** instead of stepping from one to the next (uneven little steps are
+  what showed as judder), and rests on the pixels, crisp, when it pauses.
+- **In Settings only the scrolling lines are drawn again** for their frames — not the whole
+  window, 25 times a second.
+- **A value that changes no longer restarts its line** (*Memory in use* jumped back to the start
+  every time the megabytes changed): the scroll belongs to the line's place, and the number is
+  read once a second.
+
+Taskbar monitor
+- **No more hitch once a second.** Each update moved and re-stacked the monitor inside the
+  taskbar, which goes through Explorer and waits for it — measured: 30–60 ms, on the thread that
+  draws everything. It is now only moved when its place or size really changed.
+- The taskbar's colour (for the solid background) is read from the screen on a thread of its own.
+- **Upload speed, Download speed, Disk read and Disk write are four items**, each to show, hide,
+  order and pad on its own. Your settings carry over (which were on, their order and padding).
+- **Padding** rows sit indented under the item they belong to, with a line tying them to it, and
+  move with it when ▲▼ changes the order. Padding is now saved (it was lost on restart).
+
+Island
+- While only the mascot moves on the closed island, it is drawn 30 times a second, not at the
+  display's full rate.
+
 ## 0.39.0
 
 **Phemio is now drawn by the graphics card.**

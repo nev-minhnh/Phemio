@@ -385,12 +385,14 @@ underneath (Enter again opens the chosen one). Prefer results while you type? Se
 ## Taskbar monitor
 The stats sit on a solid background in your taskbar's own colour (picked from the screen automatically, or *Transparent*), with adjustable **height** and **corner rounding**, so clicks land on them: **click** opens their settings, **drag** moves them.
 
-Live **network ↑/↓, CPU, RAM, CPU speed, GPU, disk read/write, disk space, NPU** inside the
+Live **upload speed, download speed, CPU, RAM, CPU speed, GPU, disk read, disk write, disk space,
+NPU** — each an item of its own, to show, hide and place where you like — inside the
 Windows taskbar, next to the tray (a port of TaskbarMonitor, same counters as Task Manager).
 - Normal taskbar → two lines; small taskbar → one line (or force either); left/right
   taskbar → stacked icon-over-value cells (or icon + value rows on a wide one)
 - Icons or text labels, text size, update interval, order (▲▼) and which items to show
-- Even spacing between items (**Spacing** slider) and **per-item padding** — ⋯ next to an item opens Left / Top / Right / Bottom
+- Even spacing between items (**Spacing** slider) and **per-item padding** — ⋯ next to an item opens Left / Top / Right / Bottom,
+  set in under the item they belong to; they stay with it when ▲▼ moves it
 - Drag it along the taskbar; right-click for settings / reset position / hide;
   double-click opens its settings
 - Settings → Taskbar. (Close the old TaskbarMonitor app so you don't get two.)
@@ -467,6 +469,10 @@ crashed while starting (a timer set "a minute ago" before the PC had been on a m
   part). A problem inside Link no longer takes the whole app down — that part just stops and reconnects.
 - **Something looks wrong** (say, a blank island)? Settings → About → **Copy diagnostics** copies the version,
   the island's state and the recent log — paste it into a message.
+- **Is the graphics card drawing, and how fast?** `Phemio.exe --gfx-test` (or a copy of the
+  program with `gfx-test` in its name, double-clicked) draws test pictures both ways without
+  showing anything and writes `gfx-test.txt` to the data folder: whether each way works, whether
+  the pictures match, and what the pieces of a frame cost on this PC.
 - **Slow or stuttering?** Put an empty file named `diag.on` in the data folder (Settings → About →
   Open): every two seconds a line goes to `diag.log` there — how busy the window thread was and
   with what, which threads used the processor, what Link sees, and whether frames are drawn by the
@@ -487,10 +493,12 @@ Caps Lock and the language-switch keys — and, for the drumming cat, to the fac
 ## Drawing: graphics card or processor
 Settings → General → **Draw with the graphics card** (on by default).
 
-- **On**: Direct2D rasterises each frame on the GPU and copies the finished picture into the window.
-  Drawing a frame of the open island on the processor took about 10 ms on a high-resolution,
-  fast display — longer than one of that display's frames — so animations kept the window thread
-  busy and the mouse (and the taskbar the island is attached to) waited behind them.
+- **On**: each frame is drawn into a Direct3D texture on the graphics card (Direct2D on Direct3D 11)
+  and the finished picture — or just the part that changed — is copied into the window. Measured
+  on a real PC, the pieces of a frame take 0.1–1 ms that way whatever the window's size, where
+  the processor needed 5–10 ms for the open island and over 20 ms for the Settings window — longer
+  than a frame of a fast display lasts, so animations kept the window thread busy and the mouse
+  (and the taskbar the island is attached to) waited behind them.
 - **It checks itself.** The first 40 big frames are timed on the graphics card, the next 40 on the
   processor, and the faster way stays (the graphics card unless the processor is clearly quicker —
   the finished frame has to come back from the GPU, which not every PC does fast).
