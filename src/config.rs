@@ -90,6 +90,7 @@ pub const DEFAULTS: &[(&str, i32)] = &[
     ("notes_view", 0),
     ("link_on", 1), // Link: one mouse and keyboard across PCs
     ("link_audio_in", 1), // Link: the linked PC may play its sound on this PC's speakers
+    ("gpu", 1),           // draw with the graphics card (the processor is the fallback)
     ("osd_btdev", 1), // any Bluetooth device connects / disconnects
     ("osd_radios", 1), // Wi-Fi / Bluetooth / airplane / microphone
     ("osd_saver", 1), // energy saver on / off

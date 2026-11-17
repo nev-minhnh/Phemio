@@ -103,6 +103,7 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
         0 => {
             v.push(row("Dynamic Island", "Show the island at the top of the screen", Ctl::Toggle("island"), true));
             v.push(row("Start with Windows", "Launch Phemio when you sign in", Ctl::Toggle("autostart"), true));
+            v.push(row("Draw with the graphics card", "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one", Ctl::Toggle("gpu"), true));
             v.push(row("Language", "", Ctl::Choice("lang", &crate::i18n::LANGS), true));
             v.push(row("Theme", "", Ctl::Choice("theme", &["Auto", "Dark", "Light"]), true));
             v.push(row("Hide in full screen", "Step aside for games, videos and slides", Ctl::Toggle("hide_fullscreen"), true));
@@ -304,7 +305,7 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
         }
         _ => {
             let (pws, ws, private) = util::memory_mb();
-            v.push(row("Phemio 0.38.6", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
+            v.push(row("Phemio 0.39.0", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
             v.push(row("Source code", "github.com/nev-minhnh/Phemio · MIT or Apache-2.0", Ctl::Button("Open", Act::Url("https://github.com/nev-minhnh/Phemio")), true));
             let detail = format!("{} · {} {ws:.0} MB · {} {private:.0} MB", tr("Same as Task Manager"), tr("working set"), tr("committed"));
             v.push(row("Memory in use", &detail, Ctl::Text(format!("{pws:.1} MB")), true));
@@ -1722,7 +1723,11 @@ impl Settings {
             self.hits.truncate(n_hits);
             self.surf.unclip();
             self.surf.unclip();
-            self.surf.end();
+            if !self.surf.end() {
+            unsafe {
+                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, false);
+            }
+        }
             return;
         }
         self.surf.unclip();
@@ -1801,6 +1806,10 @@ impl Settings {
             self.hits.push((Hit::Tab(t), r));
         }
         self.surf.text(&format!("v{}", env!("CARGO_PKG_VERSION")), &self.fonts.brand_sub, rf(22.0, h - 30.0, SIDE - 40.0, 16.0), fg(0.32));
-        self.surf.end();
+        if !self.surf.end() {
+            unsafe {
+                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, false);
+            }
+        }
     }
 }

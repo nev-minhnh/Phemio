@@ -467,6 +467,10 @@ crashed while starting (a timer set "a minute ago" before the PC had been on a m
   part). A problem inside Link no longer takes the whole app down — that part just stops and reconnects.
 - **Something looks wrong** (say, a blank island)? Settings → About → **Copy diagnostics** copies the version,
   the island's state and the recent log — paste it into a message.
+- **Slow or stuttering?** Put an empty file named `diag.on` in the data folder (Settings → About →
+  Open): every two seconds a line goes to `diag.log` there — how busy the window thread was and
+  with what, which threads used the processor, what Link sees, and whether frames are drawn by the
+  graphics card or the processor and how long one takes. Delete `diag.on` to stop.
 - `phemio.log` in the data folder (Settings → About → Open) notes each time the island was
   hidden for a full-screen app, shown again, or found covered — and by which program.
 
@@ -480,9 +484,27 @@ and Alt+Q, sent to Google Translate or, if you pick it, Gemini; dictionary words
 `%LOCALAPPDATA%\Phemio\contentindex.db` on this PC only; *Delete* in Settings empties it. A picture pasted after `<` is read by Gemini when you have a key (sent to Google's Gemini API), otherwise by Windows on this PC. The keyboard hook only reacts to
 Caps Lock and the language-switch keys — and, for the drumming cat, to the fact that *a* key went down; nothing you type is read or stored.
 
+## Drawing: graphics card or processor
+Settings → General → **Draw with the graphics card** (on by default).
+
+- **On**: Direct2D rasterises each frame on the GPU and copies the finished picture into the window.
+  Drawing a frame of the open island on the processor took about 10 ms on a high-resolution,
+  fast display — longer than one of that display's frames — so animations kept the window thread
+  busy and the mouse (and the taskbar the island is attached to) waited behind them.
+- **It checks itself.** The first 40 big frames are timed on the graphics card, the next 40 on the
+  processor, and the faster way stays (the graphics card unless the processor is clearly quicker —
+  the finished frame has to come back from the GPU, which not every PC does fast).
+  `phemio.log` says what was measured and chosen (`render: …`).
+- **It falls back by itself**: no usable graphics card, a frame that fails or comes back empty three
+  times in a row, a driver reset — the processor takes over (after a driver reset the graphics card
+  is simply started again). Nothing to do; the log says why.
+- **Off**: the processor draws everything, as before 0.39. Smallest memory footprint (no Direct3D
+  and no GPU driver in the process).
+
 ## Memory
-- Direct2D **software** target into a DIB + `UpdateLayeredWindow`: no Direct3D device, no GPU
-  driver DLLs in the process.
+- With *Draw with the graphics card* off: a Direct2D **software** target into a DIB +
+  `UpdateLayeredWindow` — no Direct3D device, no GPU driver DLLs in the process. On, Direct3D and
+  the driver are loaded (typically a few tens of MB more).
 - Redraws only while something animates; per-second timers run only while a ticking value is
   on screen (focus countdown, progress bar, clock pages).
 - Media, brightness and network changes are pushed by Windows; web lookups run on short-lived

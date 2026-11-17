@@ -304,6 +304,8 @@
  "Long break now": "Đang nghỉ dài",
  "Looking for more devices…": "Đang tìm thêm thiết bị…",
  "Looking for more networks…": "Đang tìm thêm mạng…",
+ "Draw with the graphics card": "Vẽ bằng card đồ họa",
+ "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one": "Hiệu ứng mượt hơn và nhẹ CPU hơn; tốn thêm bộ nhớ. Phemio đo cả hai cách một lần và giữ cách nhanh hơn",
  "Looking…": "Đang tìm…",
  "No other PC found": "Không tìm thấy PC nào khác",
  "Low battery": "Pin yếu",
@@ -879,5 +881,5 @@
  "The other PC is playing its sound here": "PC kia đang phát âm thanh của nó ở đây",
  "Not linked": "Chưa liên kết",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "PC kia không nhận âm thanh (cần Phemio 0.38 trở lên và bật Phát âm thanh từ PC đã liên kết)",
- "Phemio 0.38.6": "Phemio 0.38.6"
+ "Phemio 0.39.0": "Phemio 0.39.0"
 }

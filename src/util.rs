@@ -954,7 +954,7 @@ pub mod diag {
                 before = now;
                 let st_ = super::now();
                 let line = format!(
-                    "{:02}:{:02}:{:02} window busy {:.0}% | msgs {} | steps {} | cpu {} | link {}",
+                    "{:02}:{:02}:{:02} window busy {:.0}% | msgs {} | steps {} | cpu {} | link {} | drawn with the {}",
                     st_.wHour,
                     st_.wMinute,
                     st_.wSecond,
@@ -963,6 +963,7 @@ pub mod diag {
                     st.iter().take(10).map(|(k, v)| format!("{k}×{}={:.0}ms(max {:.0})", v.0, v.1 as f64 / 1e3, v.2 as f64 / 1e3)).collect::<Vec<_>>().join(" "),
                     th.iter().take(8).map(|(n, p)| format!("{n} {p:.0}%")).collect::<Vec<_>>().join(", "),
                     crate::link::diag_line(),
+                    crate::gfx::describe(),
                 );
                 use std::io::Write;
                 let path = dir.join("diag.log");
@@ -972,6 +973,7 @@ pub mod diag {
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
                     let _ = writeln!(f, "{line}");
                 }
+                crate::gfx::take_cost();
             }
         });
     }

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.39.0
+
+**Phemio is now drawn by the graphics card.**
+
+Until now every frame was rasterised on the processor (a Direct2D *software* target), on the
+window thread. Measured on a real PC, a frame of the open island took about 10 ms — more than
+one frame of a fast display lasts — so whenever something moved, the window thread was busy
+60–90 % of the time and the mouse, and the taskbar the island is attached to, waited behind it.
+
+- **Hardware rendering.** The Direct2D target is a hardware one: the GPU rasterises the frame and
+  the finished picture is copied into the window's bitmap. Everything else is unchanged — the
+  layered windows, clicks passing through transparent parts, partial redraws, the taskbar
+  attachment — because only the rasteriser changed, not how windows are shown.
+- **Settings → General → Draw with the graphics card** (on by default). Off draws on the processor
+  exactly as before and keeps Direct3D and the GPU driver out of the process (smallest memory
+  footprint).
+- **It times itself once.** The first 40 big frames are drawn by the graphics card, the next 40 by
+  the processor, and the faster way stays (the graphics card unless the processor is clearly
+  quicker). `phemio.log` notes the result: `render: timed both — graphics card … ms, processor … ms`.
+- **It falls back by itself.** No usable graphics card, a frame that fails or comes back empty three
+  times in a row → the processor takes over, and the log says why. After a driver reset the
+  graphics card is started again, with every uploaded picture and brush made anew.
+- The frosted panel behind the page icons (the one piece that reads back what's already drawn)
+  works with both.
+- `diag.log` (see 0.38.5) now also says which of the two draws and how long a frame takes.
+
+What could not be checked before release: the test machines have no real graphics card (frames
+there go through a software Direct3D), so the pictures were compared pixel for pixel between the
+two paths and every fallback was exercised, but the speed on real hardware is measured by the
+self-timing above on your PC, not by a number in these notes.
+
 ## 0.38.6
 
 Measured on a real PC with `diag.on`: one frame of the open island takes about 10 ms to draw

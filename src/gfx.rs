@@ -1,9 +1,19 @@
 //! Tiny Direct2D/DirectWrite/WIC layer.
 //!
-//! Every window draws into a 32-bit DIB with a *software* Direct2D DC render
-//! target and is pushed to the screen with UpdateLayeredWindowIndirect. The
-//! software target means no Direct3D device and no GPU driver DLLs get loaded,
-//! which is the single biggest reason the app stays far below 50 MB.
+//! Every window draws into a 32-bit DIB with a Direct2D DC render target and
+//! is pushed to the screen with UpdateLayeredWindowIndirect.
+//!
+//! The target is a **hardware** one where it can be (Settings → General →
+//! Draw with the graphics card): Direct2D rasterises on the GPU and copies
+//! the finished frame into the DIB, which takes the drawing itself off the
+//! window thread's processor time — a frame of the open island cost about
+//! 10 ms on the processor, more than a fast display's frame lasts. It costs
+//! memory (Direct3D and the GPU driver get loaded). The **software** target
+//! is the fallback, always there: when the hardware one can't be made, when
+//! it fails while drawing, when it turns out slower on this PC (both are
+//! timed once, see `calibrate`), or when the setting is off. Everything
+//! else — the DIB, the layered windows, partial redraws — is the same for
+//! both, so the two can be swapped while the app runs.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -27,6 +37,210 @@ pub struct Gfx {
 
 thread_local! {
     static GFX: &'static Gfx = Box::leak(Box::new(Gfx::new().expect("graphics init failed")));
+}
+
+// ---------------------------------------------------------------------------
+// Graphics card or processor
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+
+/// Targets are hardware ones now.
+static HARDWARE: AtomicBool = AtomicBool::new(false);
+/// Bumped whenever every target (and everything made with one: brushes,
+/// uploaded pictures) has to be made again: the kind changed, or the GPU
+/// was reset.
+static GEN: AtomicU32 = AtomicU32::new(1);
+/// Hardware frames in a row that failed.
+static FAILS: AtomicU32 = AtomicU32::new(0);
+/// The kind was chosen (first surface made).
+static CHOSEN: AtomicBool = AtomicBool::new(false);
+
+/// Drawing with the graphics card right now.
+pub fn hardware() -> bool {
+    HARDWARE.load(Relaxed)
+}
+
+/// "graphics card" / "processor", and what a frame costs (for the log).
+pub fn describe() -> String {
+    let (n, us) = (COST_N.load(Relaxed), COST_US.load(Relaxed));
+    format!("{}{}", if hardware() { "graphics card" } else { "processor" }, if n > 0 { format!(", {:.1} ms a frame", us as f64 / n as f64 / 1000.0) } else { String::new() })
+}
+
+/// Frames drawn (and the µs they took) since `take_cost`.
+static COST_N: AtomicU32 = AtomicU32::new(0);
+static COST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+thread_local! {
+    static CALIB: RefCell<Calib> = const { RefCell::new(Calib { phase: 0, skip: 0, hw: Vec::new(), sw: Vec::new() }) };
+}
+
+/// Start counting frames again (after reading `describe`).
+pub fn take_cost() {
+    COST_N.store(0, Relaxed);
+    COST_US.store(0, Relaxed);
+}
+
+/// What the user asked for: Settings → General → Draw with the graphics
+/// card (on unless switched off), and ISLET_GPU=0/1 for developers.
+fn wanted() -> bool {
+    match std::env::var("ISLET_GPU").ok().as_deref() {
+        Some("0") => false,
+        Some(_) => true,
+        None => crate::config::cur().b("gpu"),
+    }
+}
+
+fn set_kind(hw: bool, why: &str) {
+    if HARDWARE.swap(hw, Relaxed) != hw || !CHOSEN.load(Relaxed) {
+        GEN.fetch_add(1, Relaxed);
+    }
+    FAILS.store(0, Relaxed);
+    crate::util::log(&format!("render: drawing with the {} ({why})", if hw { "graphics card" } else { "processor" }));
+}
+
+/// The setting changed (or at start): use what it says. Windows redraw
+/// themselves with the new kind the next time they draw.
+pub fn apply_setting() {
+    thread_local! {
+        static LAST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+    let want = wanted();
+    if LAST.replace(Some(want)) == Some(want) {
+        return;
+    }
+    if !CHOSEN.swap(true, Relaxed) {
+        HARDWARE.store(!want, Relaxed); // (so set_kind sees a change)
+    }
+    set_kind(want, if want { "Settings: Draw with the graphics card" } else { "Settings: graphics card off" });
+    // (ISLET_GPU_NOCAL: developer aid — no timing, the kind asked for stays.)
+    let time_it = want && std::env::var("ISLET_GPU_NOCAL").is_err();
+    CALIB.with(|c| *c.borrow_mut() = Calib { phase: if time_it { 1 } else { 0 }, skip: 24, hw: Vec::new(), sw: Vec::new() });
+}
+
+/// Timing both kinds, once: a hardware target isn't faster on every PC
+/// (the finished frame has to come back from the GPU into the DIB), so the
+/// first big frames are timed with the graphics card, the next ones with
+/// the processor, and the faster kind stays.
+struct Calib {
+    /// 0 nothing to do · 1 timing hardware · 2 timing software · 3 hardware
+    /// kept · 4 software kept (hardware was slower here).
+    phase: u8,
+    /// Frames still to leave out (the first ones after a change make
+    /// everything again — and the very first ones also fill the font and
+    /// picture caches, whichever kind draws them).
+    skip: u32,
+    hw: Vec<f32>,
+    sw: Vec<f32>,
+}
+
+const CALIB_FRAMES: usize = 40;
+
+/// A whole frame of `px` pixels took `us` to draw.
+fn calibrate(px: i64, us: u64) {
+    COST_N.fetch_add(1, Relaxed);
+    COST_US.fetch_add(us, Relaxed);
+    // (Only frames big enough to mean something: the open island, Settings.)
+    if px < 120_000 {
+        return;
+    }
+    let per_mp = us as f32 / (px as f32 / 1e6);
+    let done = CALIB.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.phase != 1 && c.phase != 2 {
+            return None;
+        }
+        if c.skip > 0 {
+            c.skip -= 1;
+            return None;
+        }
+        if c.phase == 1 {
+            c.hw.push(per_mp);
+            if c.hw.len() >= CALIB_FRAMES {
+                c.phase = 2;
+                c.skip = 8;
+                return Some(0);
+            }
+        } else {
+            c.sw.push(per_mp);
+            if c.sw.len() >= CALIB_FRAMES {
+                let med = |v: &mut Vec<f32>| {
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    v[v.len() / 2]
+                };
+                let (h, s) = (med(&mut c.hw), med(&mut c.sw));
+                // (The graphics card stays unless the processor is clearly quicker.)
+                let keep_hw = h <= s * 1.3;
+                c.phase = if keep_hw { 3 } else { 4 };
+                crate::util::log(&format!("render: timed both — graphics card {:.1} ms, processor {:.1} ms for a million pixels", h / 1000.0, s / 1000.0));
+                return Some(if keep_hw { 1 } else { 2 });
+            }
+        }
+        None
+    });
+    match done {
+        Some(0) => set_kind(false, "timing the processor for comparison"),
+        Some(1) => set_kind(true, "it is the faster one here"),
+        Some(2) => set_kind(false, "it is the faster one here"),
+        _ => {}
+    }
+}
+
+/// A hardware frame failed (`recreate`: the GPU was reset — make everything
+/// again and carry on). Three in a row: the processor draws from now on.
+fn hardware_failed(e: &Error, recreate: bool) {
+    let n = FAILS.fetch_add(1, Relaxed) + 1;
+    if n >= 3 {
+        CALIB.with(|c| c.borrow_mut().phase = 4);
+        set_kind(false, &format!("the graphics card failed {n} times in a row: {e}"));
+    } else {
+        if n == 1 {
+            crate::util::log(&format!("render: a frame failed on the graphics card ({e}){}", if recreate { " — starting it again" } else { "" }));
+        }
+        GEN.fetch_add(1, Relaxed);
+    }
+}
+
+/// A DC render target of the kind wanted, with its brush.
+fn make_target(hw: bool) -> Result<(ID2D1DCRenderTarget, ID2D1RenderTarget, ID2D1SolidColorBrush)> {
+    // (ISLET_GPU_FAIL: developer aid — as if no graphics card could be used.)
+    if hw && std::env::var("ISLET_GPU_FAIL").is_ok() {
+        return Err(Error::from(E_FAIL));
+    }
+    unsafe {
+        let props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: if hw { D2D1_RENDER_TARGET_TYPE_HARDWARE } else { D2D1_RENDER_TARGET_TYPE_SOFTWARE },
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            usage: D2D1_RENDER_TARGET_USAGE_NONE,
+            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+        };
+        let rt = g().d2d.CreateDCRenderTarget(&props)?;
+        let base: ID2D1RenderTarget = rt.cast()?;
+        base.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        let brush = base.CreateSolidColorBrush(&rgb(0, 1.0), None)?;
+        Ok((rt, base, brush))
+    }
+}
+
+/// The target for a new surface (or one whose kind changed): hardware if
+/// that is the kind now and it can be made, else software.
+fn current_target() -> Result<(ID2D1DCRenderTarget, ID2D1RenderTarget, ID2D1SolidColorBrush, bool, u32)> {
+    if !CHOSEN.load(Relaxed) {
+        apply_setting();
+    }
+    if hardware() {
+        match make_target(true) {
+            Ok((rt, base, brush)) => return Ok((rt, base, brush, true, GEN.load(Relaxed))),
+            Err(e) => {
+                CALIB.with(|c| c.borrow_mut().phase = 4);
+                set_kind(false, &format!("the graphics card can't be used: {e}"));
+            }
+        }
+    }
+    let (rt, base, brush) = make_target(false)?;
+    Ok((rt, base, brush, false, GEN.load(Relaxed)))
 }
 
 /// The UI-thread graphics factories.
@@ -272,7 +486,8 @@ pub struct Image {
     pub w: u32,
     pub h: u32,
     px: Vec<u8>,
-    cache: RefCell<Option<ID2D1Bitmap>>,
+    /// Uploaded for the targets of this generation (see `GEN`).
+    cache: RefCell<Option<(u32, ID2D1Bitmap)>>,
 }
 
 impl Image {
@@ -412,8 +627,11 @@ impl Image {
     }
 
     fn bitmap(&self, rt: &ID2D1RenderTarget) -> Option<ID2D1Bitmap> {
-        if let Some(b) = self.cache.borrow().as_ref() {
-            return Some(b.clone());
+        let gen = GEN.load(Relaxed);
+        if let Some((g, b)) = self.cache.borrow().as_ref() {
+            if *g == gen {
+                return Some(b.clone());
+            }
         }
         let props = D2D1_BITMAP_PROPERTIES {
             pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
@@ -429,7 +647,7 @@ impl Image {
             )
             .ok()?
         };
-        *self.cache.borrow_mut() = Some(b.clone());
+        *self.cache.borrow_mut() = Some((gen, b.clone()));
         Some(b)
     }
 }
@@ -459,9 +677,16 @@ fn round_corners(px: &mut [u8], w: u32, h: u32, r: f32) {
 // ---------------------------------------------------------------------------
 
 pub struct Surface {
-    pub rt: ID2D1DCRenderTarget,
+    rt: ID2D1DCRenderTarget,
     base: ID2D1RenderTarget,
     brush: ID2D1SolidColorBrush,
+    /// `rt` is a hardware target, made for this generation (see `GEN`).
+    hw: bool,
+    gen: u32,
+    /// When this frame was begun (a whole frame, not a part).
+    began: std::cell::Cell<Option<std::time::Instant>>,
+    /// The frame being drawn has failed already (see `end`).
+    broken: std::cell::Cell<bool>,
     round_cap: ID2D1StrokeStyle,
     dash: ID2D1StrokeStyle,
     dc: HDC,
@@ -493,18 +718,7 @@ impl Surface {
     pub fn new() -> Result<Surface> {
         let g = g();
         unsafe {
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-                pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-                dpiX: 96.0,
-                dpiY: 96.0,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            let rt = g.d2d.CreateDCRenderTarget(&props)?;
-            let base: ID2D1RenderTarget = rt.cast()?;
-            base.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            let brush = base.CreateSolidColorBrush(&rgb(0, 1.0), None)?;
+            let (rt, base, brush, hw, gen) = current_target()?;
             let dc = CreateCompatibleDC(None);
             let caps = D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_ROUND,
@@ -517,7 +731,44 @@ impl Surface {
             };
             let round_cap = g.d2d.CreateStrokeStyle(&caps, None)?;
             let dash = g.d2d.CreateStrokeStyle(&D2D1_STROKE_STYLE_PROPERTIES { dashStyle: D2D1_DASH_STYLE_DASH, ..caps }, None)?;
-            Ok(Surface { rt, base, brush, round_cap, dash, dc, bmp: HBITMAP::default(), old: HGDIOBJ::default(), bits: std::ptr::null_mut(), w: 0, h: 0, scale: 1.0, marquee: std::cell::Cell::new(None) })
+            Ok(Surface {
+                rt,
+                base,
+                brush,
+                hw,
+                gen,
+                began: std::cell::Cell::new(None),
+                broken: std::cell::Cell::new(false),
+                round_cap,
+                dash,
+                dc,
+                bmp: HBITMAP::default(),
+                old: HGDIOBJ::default(),
+                bits: std::ptr::null_mut(),
+                w: 0,
+                h: 0,
+                scale: 1.0,
+                marquee: std::cell::Cell::new(None),
+            })
+        }
+    }
+
+    /// The target of the kind in use now (made again when that changed, or
+    /// after the GPU was reset). False: no target could be made.
+    fn sync(&mut self) -> bool {
+        if self.gen == GEN.load(Relaxed) {
+            return true;
+        }
+        match current_target() {
+            Ok((rt, base, brush, hw, gen)) => {
+                self.rt = rt;
+                self.base = base;
+                self.brush = brush;
+                self.hw = hw;
+                self.gen = gen;
+                true
+            }
+            Err(_) => false,
         }
     }
 
@@ -565,11 +816,19 @@ impl Surface {
         if self.bmp.is_invalid() {
             return false;
         }
+        if !self.sync() {
+            return false;
+        }
         self.scale = scale;
         self.marquee.set(None);
+        self.broken.set(false);
+        self.began.set(Some(std::time::Instant::now()));
         unsafe {
             let r = RECT { left: 0, top: 0, right: self.w, bottom: self.h };
-            if self.rt.BindDC(self.dc, &r).is_err() {
+            if let Err(e) = self.rt.BindDC(self.dc, &r) {
+                if self.hw {
+                    hardware_failed(&e, false);
+                }
                 return false;
             }
             self.base.SetDpi(96.0 * scale, 96.0 * scale);
@@ -586,8 +845,13 @@ impl Surface {
         if self.bmp.is_invalid() {
             return false;
         }
+        if !self.sync() {
+            return false;
+        }
         self.scale = scale;
         self.marquee.set(None);
+        self.broken.set(false);
+        self.began.set(None);
         let r = RECT {
             left: ((part.left * scale).floor() as i32).clamp(0, self.w),
             top: ((part.top * scale).floor() as i32).clamp(0, self.h),
@@ -598,7 +862,10 @@ impl Surface {
             return false;
         }
         unsafe {
-            if self.rt.BindDC(self.dc, &r).is_err() {
+            if let Err(e) = self.rt.BindDC(self.dc, &r) {
+                if self.hw {
+                    hardware_failed(&e, false);
+                }
                 return false;
             }
             self.base.SetDpi(96.0 * scale, 96.0 * scale);
@@ -609,9 +876,43 @@ impl Surface {
         true
     }
 
-    pub fn end(&self) {
-        unsafe {
-            let _ = self.base.EndDraw(None, None);
+    /// The frame is finished (and, from a hardware target, copied into the
+    /// DIB). False: it failed and what's in the DIB isn't a picture — draw
+    /// it again (the next try uses a new target, or the processor).
+    pub fn end(&self) -> bool {
+        let r = unsafe { self.base.EndDraw(None, None) };
+        let began = self.began.take();
+        match r {
+            Ok(()) if !self.broken.get() => {
+                if self.hw {
+                    // The first big frames from the graphics card: is there a
+                    // picture in the DIB at all? (A driver that draws nothing
+                    // and reports no error would leave Phemio invisible.)
+                    static CHECKED: AtomicU32 = AtomicU32::new(0);
+                    if began.is_some() && self.w as i64 * self.h as i64 >= 120_000 && !self.bits.is_null() && CHECKED.load(Relaxed) < 30 {
+                        CHECKED.fetch_add(1, Relaxed);
+                        let px = unsafe { std::slice::from_raw_parts(self.bits, (self.w * self.h * 4) as usize) };
+                        if !px.chunks_exact(4).step_by(7).any(|p| p[3] != 0) {
+                            hardware_failed(&Error::new(E_FAIL, "the frame came back empty"), false);
+                            return false;
+                        }
+                    }
+                    FAILS.store(0, Relaxed);
+                }
+                if let Some(t) = began {
+                    calibrate(self.w as i64 * self.h as i64, t.elapsed().as_micros() as u64);
+                }
+                true
+            }
+            Ok(()) => false,
+            Err(e) => {
+                if self.hw {
+                    hardware_failed(&e, e.code() == D2DERR_RECREATE_TARGET);
+                } else if e.code() == D2DERR_RECREATE_TARGET {
+                    GEN.fetch_add(1, Relaxed);
+                }
+                false
+            }
         }
     }
 
@@ -1080,8 +1381,21 @@ impl Surface {
             return;
         }
         unsafe {
-            // What's been drawn so far, into the bitmap.
-            let _ = self.base.Flush(None, None);
+            // What's been drawn so far, into the bitmap. A hardware target
+            // only copies its picture there when the frame ends: end it
+            // here and begin again (the picture, the transform and the
+            // DIB all stay as they are).
+            if self.hw {
+                if let Err(e) = self.base.EndDraw(None, None) {
+                    self.broken.set(true);
+                    hardware_failed(&e, e.code() == D2DERR_RECREATE_TARGET);
+                    self.base.BeginDraw();
+                    return;
+                }
+                self.base.BeginDraw();
+            } else {
+                let _ = self.base.Flush(None, None);
+            }
         }
         let src = unsafe { std::slice::from_raw_parts(self.bits, (self.w * self.h * 4) as usize) };
         let stride = self.w as usize * 4;
@@ -1215,7 +1529,7 @@ pub fn make_app_icon(size: i32) -> HICON {
             return HICON::default();
         }
         draw_logo(&s, 0.0, 0.0, 32.0, 1.0, 1.45);
-        s.end();
+        let _ = s.end();
         let mask = CreateBitmap(size, size, 1, 1, None);
         let info = ICONINFO { fIcon: TRUE, xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: s.bmp };
         let icon = CreateIconIndirect(&info).unwrap_or_default();

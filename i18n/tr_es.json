@@ -304,6 +304,8 @@
  "Long break now": "Descanso largo ahora",
  "Looking for more devices…": "Buscando más dispositivos…",
  "Looking for more networks…": "Buscando más redes…",
+ "Draw with the graphics card": "Dibujar con la tarjeta gráfica",
+ "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one": "Animaciones más fluidas y menos carga para el procesador; usa más memoria. Phemio mide ambos métodos una vez y se queda con el más rápido",
  "Looking…": "Buscando…",
  "No other PC found": "No se encontró ningún otro PC",
  "Low battery": "Batería baja",
@@ -879,5 +881,5 @@
  "The other PC is playing its sound here": "El otro PC está reproduciendo su sonido aquí",
  "Not linked": "Sin vincular",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "El otro PC no aceptó el sonido (necesita Phemio 0.38 o posterior, con «Reproducir el sonido de los PC vinculados» activado)",
- "Phemio 0.38.6": "Phemio 0.38.6"
+ "Phemio 0.39.0": "Phemio 0.39.0"
 }

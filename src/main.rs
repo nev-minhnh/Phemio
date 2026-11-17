@@ -754,6 +754,7 @@ impl App {
     fn apply(&mut self) {
         let _p = util::Prof::new("app.apply");
         let _d = util::diag::Span::new("app.apply");
+        gfx::apply_setting();
         self.apply_pending = false;
         let c = config::cur();
         let on = c.b("island");

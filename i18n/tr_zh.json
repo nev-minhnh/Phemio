@@ -304,6 +304,8 @@
  "Long break now": "长休息中",
  "Looking for more devices…": "正在查找更多设备…",
  "Looking for more networks…": "正在查找更多网络…",
+ "Draw with the graphics card": "使用显卡绘制",
+ "Smoother animations and a lighter load on the processor; uses more memory. Phemio times both ways once and keeps the faster one": "动画更流畅，处理器负担更轻；占用更多内存。Phemio 会各测一次并保留更快的方式",
  "Looking…": "正在查找…",
  "No other PC found": "未找到其他电脑",
  "Low battery": "电量低",
@@ -879,5 +881,5 @@
  "The other PC is playing its sound here": "另一台电脑正在这里播放它的声音",
  "Not linked": "未连接",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "另一台电脑没有接收声音（需要 Phemio 0.38 或更新版本，并开启“播放已连接电脑的声音”）",
- "Phemio 0.38.6": "Phemio 0.38.6"
+ "Phemio 0.39.0": "Phemio 0.39.0"
 }

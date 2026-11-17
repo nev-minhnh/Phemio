@@ -739,7 +739,7 @@ impl Monitor {
                 }
                 x += item_w(it) + gap;
             }
-            self.surf.end();
+            let _ = self.surf.end();
             // Position: next to the tray (default), or pinned to the far
             // left / far right end (there, dragging doesn't move it).
             let margin = (6.0 * scale) as i32;
@@ -795,7 +795,7 @@ impl Monitor {
                 }
                 y += cell_h + pb;
             }
-            self.surf.end();
+            let _ = self.surf.end();
             let margin = (6.0 * scale) as i32;
             let edge = (c.i("tbm_edge").clamp(0, 400) as f32 * scale) as i32;
             // Side taskbar: far left = top end, far right = bottom end.

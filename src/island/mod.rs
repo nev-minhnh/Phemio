@@ -5407,7 +5407,10 @@ impl Island {
             self.draw_translate(x, y, w, h, clamp01(ta * 1.6 - 0.6));
         }
         self.surf.unclip();
-        self.surf.end();
+        if !self.surf.end() {
+            // (The graphics card dropped the frame: once more, shortly.)
+            self.slow_redraw();
+        }
         // A long line scrolling: frames while it moves, a timer for its pauses.
         match self.surf.take_marquee() {
             // (25 frames a second is plenty for text gliding by, and light.)

@@ -36,8 +36,10 @@ zero CPU while nothing on it moves.
 - **Transparency.** See-through taskbar and File Explorer backgrounds (clear or frosted), with one
   click to put Windows' own look back.
 - **Six languages** besides English: Tiếng Việt, 中文, 한국어, 日本語, Français, Español.
-- **Light on memory.** A software Direct2D target into a layered window — no GPU driver DLLs in the
-  process; redraws only while something animates.
+- **Smooth and light.** Drawn by the graphics card (Direct2D hardware target into a layered window),
+  with the processor as an automatic fallback — or the processor only, for the smallest memory
+  footprint (Settings → General → *Draw with the graphics card*). Redraws only while something
+  animates.
 
 The [user guide](docs/USER_GUIDE.md) describes every page and setting.
 
