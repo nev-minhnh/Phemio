@@ -3759,13 +3759,24 @@ impl Island {
                             return Some(LRESULT(0));
                         }
                     }
+                    // (While frames are being drawn anyway, the next one shows
+                    // it: drawing here as well, for every movement of the
+                    // mouse, doubled the work.)
                     let hot = self.hit(x, y);
                     if hot != self.hot {
                         self.hot = hot;
-                        self.render();
+                        if self.animating {
+                            self.keep_anim = true;
+                        } else {
+                            self.render();
+                        }
                     } else if self.pbar.v > 0.01 || self.pbar.target > 0.5 {
                         // The page dock swells with the pointer.
-                        self.render();
+                        if self.animating {
+                            self.keep_anim = true;
+                        } else {
+                            self.render();
+                        }
                     }
                 }
                 WM_MOUSELEAVE => {
@@ -4967,6 +4978,15 @@ impl Island {
         self.render();
     }
 
+    /// Draw again shortly (about 12 times a second while this keeps being
+    /// asked for): for things that shimmer or glide but needn't be smooth.
+    pub(crate) fn slow_redraw(&mut self) {
+        if !self.slow_anim {
+            self.slow_anim = true;
+            unsafe { SetTimer(Some(self.hwnd), T_SLOW, 80, None) };
+        }
+    }
+
     fn on_timer(&mut self, id: usize) {
         unsafe {
             match id {
@@ -5002,6 +5022,22 @@ impl Island {
                     if !self.animating {
                         return;
                     }
+                    // The island is drawn on the processor: a frame of the
+                    // open island can take longer than a fast display's
+                    // frame lasts. Drawing every frame then left the window
+                    // thread no time for the mouse — and the taskbar the
+                    // island is attached to stuttered with it. So: at least
+                    // as long free as the last frame took to draw.
+                    thread_local! {
+                        static LAST: std::cell::Cell<(Option<Instant>, std::time::Duration)> = const { std::cell::Cell::new((None, std::time::Duration::ZERO)) };
+                    }
+                    let (ended, cost) = LAST.get();
+                    if let Some(e) = ended {
+                        if e.elapsed() < cost.min(std::time::Duration::from_millis(40)) {
+                            crate::util::diag::count("anim.skipped");
+                            return;
+                        }
+                    }
                     let now = Instant::now();
                     // Whole display frames: steps that match what's shown,
                     // so motion doesn't judder when a frame arrives a bit
@@ -5018,6 +5054,7 @@ impl Island {
                         self.eq_t += dt;
                     }
                     self.render();
+                    LAST.set((Some(Instant::now()), now.elapsed()));
                     if moving {
                         crate::util::diag::count("anim.springs");
                     }

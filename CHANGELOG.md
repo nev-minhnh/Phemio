@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.38.6
+
+Measured on a real PC with `diag.on`: one frame of the open island takes about 10 ms to draw
+(it is drawn on the processor), on a display whose frames are shorter than that — so anything
+that moved kept the window thread busy 60–90 % of the time, and the mouse waited behind it.
+
+- **Animations leave time for the mouse.** A frame is only drawn once the window thread has been
+  free for at least as long as the last frame took: about half its time stays free whatever the
+  display's rate, instead of frames being drawn back to back.
+- **Moving the mouse over the island no longer draws it twice.** While frames are being drawn
+  anyway (the page dots swelling under the pointer…), each movement of the mouse drew the island
+  once more on top of them.
+- **The Link page's pointer dot** followed the mouse by redrawing the whole island at the full
+  frame rate for every movement of the mouse anywhere on the desktop; it now glides at about 12
+  frames a second.
+
 ## 0.38.5
 
 - **The Link page no longer keeps Phemio — and the taskbar — busy.** With Link on and no other

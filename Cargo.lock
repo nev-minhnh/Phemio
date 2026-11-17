@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "phemio"
-version = "0.38.5"
+version = "0.38.6"
 dependencies = [
  "aes-gcm",
  "flate2",
