@@ -879,5 +879,5 @@
  "The other PC is playing its sound here": "もう一方の PC がここで音を再生しています",
  "Not linked": "リンクされていません",
  "The other PC didn't take the sound (it needs Phemio 0.38 or newer, with Play sound from linked PCs on)": "もう一方の PC が音を受け取りませんでした（Phemio 0.38 以降で「リンクした PC の音を再生」をオンにしてください）",
- "Phemio 0.38.4": "Phemio 0.38.4"
+ "Phemio 0.38.5": "Phemio 0.38.5"
 }

@@ -753,6 +753,7 @@ impl App {
     /// Bring every component in line with the current configuration.
     fn apply(&mut self) {
         let _p = util::Prof::new("app.apply");
+        let _d = util::diag::Span::new("app.apply");
         self.apply_pending = false;
         let c = config::cur();
         let on = c.b("island");
@@ -1860,12 +1861,13 @@ fn main() {
         SetTimer(Some(host), T_TRIM, 4000, None);
 
         util::stall::start();
+        util::diag::start();
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             util::stall::begin(msg.message);
             DispatchMessageW(&msg);
-            util::stall::end();
+            util::stall::end_as(msg.message as u64 | if msg.message == WM_TIMER { (msg.wParam.0 as u64 & 0xffff) << 32 } else { 0 });
         }
         let _ = DeregisterShellHookWindow(host);
     }

@@ -568,6 +568,7 @@ impl Monitor {
     }
 
     fn render(&mut self) {
+        let _d = crate::util::diag::Span::new("tbmon.render");
         self.attach();
         if !self.attached() {
             return;

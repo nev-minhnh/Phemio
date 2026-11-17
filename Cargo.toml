@@ -1,6 +1,6 @@
 [package]
 name = "phemio"
-version = "0.38.4"
+version = "0.38.5"
 edition = "2021"
 description = "Phemio – Your desktop cameo. A Dynamic Island for Windows 11."
 license = "MIT OR Apache-2.0"
@@ -63,6 +63,7 @@ features = [
   "Win32_System_Shutdown",
   "Win32_Security_Credentials",
   "Win32_System_ProcessStatus",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Registry",
   "Win32_System_IO",
   "Win32_System_SystemInformation",

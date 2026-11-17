@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.38.5
+
+- **The Link page no longer keeps Phemio — and the taskbar — busy.** With Link on and no other
+  PC to link to, the page shows a shimmering *Looking…* (or *Waiting for it on the network…* for
+  a paired PC that isn't there). That shimmer redrew the whole open island at the display's full
+  rate for as long as it showed — measured: the window thread busy about 90 % of the time. With
+  the island attached to the taskbar, Windows ties the two together, so the taskbar and Explorer
+  stuttered and froze with it, and so did everything else Phemio draws. The shimmer now redraws
+  about 12 times a second, and the page itself only when something on it changed (it used to be
+  drawn 8 times a second regardless). Same fix for the shimmer in Search and Translate.
+- For finding out what makes Phemio slow: while a file named `diag.on` is in
+  `%APPDATA%\Phemio`, a line goes to `diag.log` there every two seconds — how busy the window
+  thread was and with what, which threads used the processor, and what Link sees.
+
 ## 0.38.4
 
 - **Link asks the network's addresses once, not over and over.** One pass when Link is switched

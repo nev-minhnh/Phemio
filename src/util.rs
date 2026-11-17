@@ -745,6 +745,7 @@ pub mod stall {
     static DOING: Mutex<&'static str> = Mutex::new("");
     /// The `SINCE` already reported by the watcher.
     static TOLD: AtomicU64 = AtomicU64::new(0);
+    static BEGAN_US: AtomicU64 = AtomicU64::new(0);
 
     fn now() -> u64 {
         T0.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
@@ -769,6 +770,15 @@ pub mod stall {
     pub fn begin(message: u32) {
         MESSAGE.store(message, Relaxed);
         SINCE.store(now(), Relaxed);
+        BEGAN_US.store(T0.get_or_init(Instant::now).elapsed().as_micros() as u64, Relaxed);
+    }
+    /// (`key`: the message, with the timer's id above it for WM_TIMER.)
+    pub fn end_as(key: u64) {
+        if super::diag::on() {
+            let us = (T0.get_or_init(Instant::now).elapsed().as_micros() as u64).saturating_sub(BEGAN_US.load(Relaxed));
+            super::diag::message(key, us);
+        }
+        end();
     }
     pub fn end() {
         let since = SINCE.swap(0, Relaxed);
@@ -798,5 +808,171 @@ pub mod stall {
                 }
             }
         }
+    }
+}
+
+/// Finding out what makes Phemio (and the taskbar it is attached to) slow:
+/// while a file named `diag.on` sits in the data folder, a line goes to
+/// `diag.log` there every two seconds — how busy the window thread was and
+/// with which messages, how often the named steps ran and how long they
+/// took, and which threads used the processor. Costs next to nothing when
+/// the file isn't there.
+pub mod diag {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static ON: AtomicBool = AtomicBool::new(false);
+    /// message key → (count, total µs, longest µs)
+    static MSGS: Mutex<Option<HashMap<u64, (u32, u64, u64)>>> = Mutex::new(None);
+    /// step → (count, total µs, longest µs)
+    static STEPS: Mutex<Option<HashMap<&'static str, (u32, u64, u64)>>> = Mutex::new(None);
+
+    pub fn on() -> bool {
+        ON.load(Relaxed)
+    }
+
+    pub fn message(key: u64, us: u64) {
+        if let Ok(mut g) = MSGS.lock() {
+            let e = g.get_or_insert_with(HashMap::new).entry(key).or_insert((0, 0, 0));
+            *e = (e.0 + 1, e.1 + us, e.2.max(us));
+        }
+    }
+
+    fn step(what: &'static str, us: u64) {
+        if let Ok(mut g) = STEPS.lock() {
+            let e = g.get_or_insert_with(HashMap::new).entry(what).or_insert((0, 0, 0));
+            *e = (e.0 + 1, e.1 + us, e.2.max(us));
+        }
+    }
+
+    /// "This happened" (counted).
+    pub fn count(what: &'static str) {
+        if on() {
+            step(what, 0);
+        }
+    }
+
+    /// A step, timed from here until it is dropped.
+    pub struct Span(Option<(&'static str, Instant)>);
+    impl Span {
+        pub fn new(what: &'static str) -> Span {
+            Span(on().then(|| (what, Instant::now())))
+        }
+    }
+    impl Drop for Span {
+        fn drop(&mut self) {
+            if let Some((what, t)) = self.0 {
+                step(what, t.elapsed().as_micros() as u64);
+            }
+        }
+    }
+
+    /// Processor time of each of this process's threads so far (100 ns), with its name.
+    fn threads() -> HashMap<u32, (u64, String)> {
+        use windows::Win32::Foundation::{CloseHandle, FILETIME, HLOCAL, LocalFree};
+        use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32};
+        use windows::Win32::System::Threading::{GetCurrentProcessId, GetThreadDescription, GetThreadTimes, OpenThread, THREAD_QUERY_LIMITED_INFORMATION};
+        let mut out = HashMap::new();
+        unsafe {
+            let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else { return out };
+            let me = GetCurrentProcessId();
+            let mut e = THREADENTRY32 { dwSize: std::mem::size_of::<THREADENTRY32>() as u32, ..Default::default() };
+            let mut ok = Thread32First(snap, &mut e).is_ok();
+            while ok {
+                if e.th32OwnerProcessID == me {
+                    if let Ok(h) = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, false, e.th32ThreadID) {
+                        let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+                        if GetThreadTimes(h, &mut c, &mut x, &mut k, &mut u).is_ok() {
+                            let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+                            let name = GetThreadDescription(h)
+                                .ok()
+                                .map(|p| {
+                                    let s = p.to_string().unwrap_or_default();
+                                    let _ = LocalFree(Some(HLOCAL(p.0 as *mut _)));
+                                    s
+                                })
+                                .unwrap_or_default();
+                            out.insert(e.th32ThreadID, (t(k) + t(u), name));
+                        }
+                        let _ = CloseHandle(h);
+                    }
+                }
+                ok = Thread32Next(snap, &mut e).is_ok();
+            }
+            let _ = CloseHandle(snap);
+        }
+        out
+    }
+
+    /// Call once at start.
+    pub fn start() {
+        let ui = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+        let _ = std::thread::Builder::new().name("diag".into()).spawn(move || {
+            let dir = crate::config::dir();
+            let mut before: HashMap<u32, (u64, String)> = HashMap::new();
+            let mut last = Instant::now();
+            loop {
+                std::thread::sleep(Duration::from_millis(2000));
+                let want = dir.join("diag.on").exists();
+                if want != on() {
+                    ON.store(want, Relaxed);
+                    if let Ok(mut g) = MSGS.lock() {
+                        *g = None;
+                    }
+                    if let Ok(mut g) = STEPS.lock() {
+                        *g = None;
+                    }
+                    before = if want { threads() } else { HashMap::new() };
+                    last = Instant::now();
+                    continue;
+                }
+                if !want {
+                    continue;
+                }
+                let span = last.elapsed().as_secs_f64().max(0.001);
+                last = Instant::now();
+                let msgs = MSGS.lock().ok().and_then(|mut g| g.take()).unwrap_or_default();
+                let steps = STEPS.lock().ok().and_then(|mut g| g.take()).unwrap_or_default();
+                let now = threads();
+                let busy: u64 = msgs.values().map(|m| m.1).sum();
+                let mut m: Vec<_> = msgs.into_iter().collect();
+                m.sort_by_key(|x| std::cmp::Reverse(x.1 .1));
+                let mut st: Vec<_> = steps.into_iter().collect();
+                st.sort_by_key(|x| std::cmp::Reverse((x.1 .1, x.1 .0)));
+                let mut th: Vec<(String, f64)> = now
+                    .iter()
+                    .map(|(id, (t, name))| {
+                        let d = t.saturating_sub(before.get(id).map(|b| b.0).unwrap_or(*t));
+                        let label = if *id == ui { "window".to_string() } else if name.is_empty() { format!("#{id}") } else { name.clone() };
+                        (label, d as f64 / 1e7 / span * 100.0)
+                    })
+                    .filter(|x| x.1 >= 0.5)
+                    .collect();
+                th.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                before = now;
+                let st_ = super::now();
+                let line = format!(
+                    "{:02}:{:02}:{:02} window busy {:.0}% | msgs {} | steps {} | cpu {} | link {}",
+                    st_.wHour,
+                    st_.wMinute,
+                    st_.wSecond,
+                    busy as f64 / 1e6 / span * 100.0,
+                    m.iter().take(6).map(|(k, v)| format!("{:04x}{}×{}={:.0}ms(max {:.0})", k & 0xffff_ffff, if k >> 32 != 0 { format!("/t{}", k >> 32) } else { String::new() }, v.0, v.1 as f64 / 1e3, v.2 as f64 / 1e3)).collect::<Vec<_>>().join(" "),
+                    st.iter().take(10).map(|(k, v)| format!("{k}×{}={:.0}ms(max {:.0})", v.0, v.1 as f64 / 1e3, v.2 as f64 / 1e3)).collect::<Vec<_>>().join(" "),
+                    th.iter().take(8).map(|(n, p)| format!("{n} {p:.0}%")).collect::<Vec<_>>().join(", "),
+                    crate::link::diag_line(),
+                );
+                use std::io::Write;
+                let path = dir.join("diag.log");
+                if std::fs::metadata(&path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
+                    let _ = std::fs::remove_file(&path);
+                }
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                    let _ = writeln!(f, "{line}");
+                }
+            }
+        });
     }
 }

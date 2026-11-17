@@ -304,7 +304,7 @@ fn rows(tab: usize, c: &Config) -> Vec<Row> {
         }
         _ => {
             let (pws, ws, private) = util::memory_mb();
-            v.push(row("Phemio 0.38.4", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
+            v.push(row("Phemio 0.38.5", "Phemio – Your desktop cameo · a Dynamic Island for Windows 11, native Rust + Direct2D", Ctl::Text(String::new()), true));
             v.push(row("Source code", "github.com/nev-minhnh/Phemio · MIT or Apache-2.0", Ctl::Button("Open", Act::Url("https://github.com/nev-minhnh/Phemio")), true));
             let detail = format!("{} · {} {ws:.0} MB · {} {private:.0} MB", tr("Same as Task Manager"), tr("working set"), tr("committed"));
             v.push(row("Memory in use", &detail, Ctl::Text(format!("{pws:.1} MB")), true));
@@ -1411,6 +1411,7 @@ impl Settings {
 
     fn render(&mut self) {
         let _p = util::Prof::new("settings.render");
+        let _d = util::diag::Span::new("settings.render");
         let s = self.scale;
         // Just one row (a slider being dragged): keep the rest as it is.
         let part = self.partial.take().filter(|p| p.bottom > p.top);

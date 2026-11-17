@@ -1473,7 +1473,11 @@ impl Island {
                 break;
             }
         }
-        self.keep_anim = true;
+        crate::util::diag::count("anim.thinking");
+        if !self.slow_anim {
+            self.slow_anim = true;
+            unsafe { SetTimer(Some(self.hwnd), super::T_SLOW, 80, None) };
+        }
     }
 }
 

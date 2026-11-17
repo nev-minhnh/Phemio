@@ -319,6 +319,7 @@ static UI_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 fn tell_ui() {
     use std::sync::atomic::Ordering::SeqCst;
+    crate::util::diag::count("link.tell_ui");
     let h = HOST.load(SeqCst);
     if h == 0 || UI_PENDING.swap(true, SeqCst) {
         return;
@@ -371,6 +372,7 @@ pub struct View {
 pub fn view() -> Option<View> {
     // (What was drawn last, for the rare moment the state is busy.)
     static LAST: Mutex<Option<View>> = Mutex::new(None);
+    let _d = crate::util::diag::Span::new("link.view");
     let got = with_soon(|s| {
         let paired_ids: Vec<u64> = s.paired.iter().map(|p| p.id).collect();
         View {
@@ -400,7 +402,10 @@ pub fn view() -> Option<View> {
             }
             v?
         }
-        Err(()) => LAST.lock().ok().and_then(|l| l.clone())?,
+        Err(()) => {
+            crate::util::diag::count("link.view-busy");
+            LAST.lock().ok().and_then(|l| l.clone())?
+        }
     };
     v.pointer = match input::captured() {
         Some((_, p)) => Some((p, true)),
@@ -1184,6 +1189,28 @@ fn no_conn_reset(sock: &UdpSocket) {
 static RESCAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// That is going on now.
 static SCANNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// For `util::diag`: what Link sees right now.
+pub fn diag_line() -> String {
+    match with_soon(|s| {
+        if !s.started {
+            return "off".to_string();
+        }
+        format!(
+            "on, {} paired, session {}, hold {} quiet {}, scanning {}, peers [{}]",
+            s.paired.len(),
+            s.session.as_ref().map(|x| if x.live { "live" } else { "waiting" }).unwrap_or("none"),
+            s.hold,
+            s.quiet,
+            scanning(),
+            s.peers.iter().map(|p| format!("{} {} {}s{}", p.name, p.addr, p.seen.elapsed().as_secs(), if s.paired.iter().any(|q| q.id == p.id) { " paired" } else { "" })).collect::<Vec<_>>().join("; ")
+        )
+    }) {
+        Ok(Some(l)) => l,
+        Ok(None) => "off".into(),
+        Err(()) => "busy".into(),
+    }
+}
 
 /// Refresh on the Link page: look for other PCs again, address by address.
 pub fn rescan() {

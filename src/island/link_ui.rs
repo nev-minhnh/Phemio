@@ -208,9 +208,9 @@ impl Island {
                         let k = 0.5;
                         let n = (d.0 + (p.0 - d.0) * k, d.1 + (p.1 - d.1) * k);
                         if (n.0 - p.0).abs() > 0.5 || (n.1 - p.1).abs() > 0.5 {
-                            self.keep_anim = true;
+                            self.keep_anim = true; crate::util::diag::count("anim.link1");
                         } else if self.link_dot_target != Some(p) {
-                            self.keep_anim = true;
+                            self.keep_anim = true; crate::util::diag::count("anim.link2");
                         }
                         // Jumped across the map (crossing): no slide.
                         if (p.0 - d.0).abs() + (p.1 - d.1).abs() > 2000.0 { p } else { n }
@@ -218,7 +218,7 @@ impl Island {
                     _ => p,
                 };
                 if self.link_dot_target != Some(p) {
-                    self.keep_anim = true;
+                    self.keep_anim = true; crate::util::diag::count("anim.link3");
                 }
                 self.link_dot = Some(shown);
                 self.link_dot_target = Some(p);

@@ -62,6 +62,8 @@ const T_TBNOW: usize = 41;
 const T_MARQUEE: usize = 42;
 /// A swipe's fingers have lifted (no more events for a moment).
 const T_SWIPE: usize = 43;
+/// The slow redraw for shimmering text (see `slow_anim`).
+pub(crate) const T_SLOW: usize = 44;
 
 /// The island's window and the taskbar being watched (for the event hook,
 /// which has no other way in).
@@ -1026,6 +1028,10 @@ pub struct Island {
     pub(crate) tall: bool,
     /// Something drawn this frame is still moving (keep the animation ticking).
     pub(crate) keep_anim: bool,
+    /// Something drawn shimmers ("Looking…"): redraw a few times a second —
+    /// not at the display's full rate, which kept the window thread (and
+    /// the taskbar the island is attached to) busy for as long as it showed.
+    pub(crate) slow_anim: bool,
     /// For looping animations (thinking dots).
     pub(crate) born: Instant,
     pub(crate) ctl_list: u8,
@@ -1362,6 +1368,7 @@ impl Island {
                 doc_back: None,
                 tall: false,
                 keep_anim: false,
+                slow_anim: false,
                 born: Instant::now(),
                 ctl_list: 0,
                 kb_list: Vec::new(),
@@ -1559,6 +1566,7 @@ impl Island {
     /// Recompute monitor, scale and window rectangle from settings.
     pub fn relayout(&mut self) {
         let _p = util::Prof::new("island.relayout");
+        let _d = util::diag::Span::new("island.relayout");
         // (First time: start watching the taskbar.)
         if self.tb_hook.is_none() && self.tb_seen.is_none() {
             self.watch_taskbar();
@@ -4962,9 +4970,29 @@ impl Island {
     fn on_timer(&mut self, id: usize) {
         unsafe {
             match id {
+                T_SLOW => {
+                    if std::mem::take(&mut self.slow_anim) {
+                        // (Drawing it asks again while it still shows.)
+                        if !self.animating && !self.suppressed {
+                            self.render();
+                        }
+                    } else {
+                        let _ = KillTimer(Some(self.hwnd), T_SLOW);
+                    }
+                }
                 link_ui::T_LINKUI => {
                     if self.expanded && self.page == Page::Link {
-                        self.render();
+                        // Only when something on the page changed (it used
+                        // to be drawn again 8 times a second regardless).
+                        use std::hash::{Hash, Hasher};
+                        static SIG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        format!("{:?}", crate::link::view()).hash(&mut h);
+                        (crate::link::scanning(), crate::link::firewall::busy(), crate::link::firewall::state() as u8).hash(&mut h);
+                        let sig = h.finish();
+                        if SIG.swap(sig, std::sync::atomic::Ordering::Relaxed) != sig {
+                            self.render();
+                        }
                     } else {
                         let _ = KillTimer(Some(self.hwnd), link_ui::T_LINKUI);
                     }
@@ -4990,6 +5018,12 @@ impl Island {
                         self.eq_t += dt;
                     }
                     self.render();
+                    if moving {
+                        crate::util::diag::count("anim.springs");
+                    }
+                    if self.keep_anim {
+                        crate::util::diag::count("anim.keep");
+                    }
                     moving |= std::mem::take(&mut self.keep_anim);
                     // Search closed and the island is small again: shrink the window back.
                     if !moving && self.tall && !self.search_popup() && self.trans.is_none() {
@@ -5253,6 +5287,7 @@ impl Island {
         }
         let _p = util::Prof::new("island.render");
         let _c = util::stall::Crumb::new("drawing the island");
+        let _d = util::diag::Span::new("island.render");
         self.edit_view = None;
         let s = self.scale;
         if !self.surf.begin(s) {
