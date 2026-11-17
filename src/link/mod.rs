@@ -79,6 +79,11 @@ pub struct Session {
     remote: Option<SocketAddr>,
     /// Where it takes calls, when we called it.
     call: Option<SocketAddr>,
+    /// The other PC has spoken on it: until then it isn't shown as linked and
+    /// nothing is set up for it (a connection the other side drops at once —
+    /// it has a link already, it took the call for something else — must
+    /// not look like a link that came and went).
+    live: bool,
 }
 
 /// Something only the window's thread can do (clipboard, windows, the shelf).
@@ -166,7 +171,40 @@ static ST: Mutex<Option<State>> = Mutex::new(None);
 fn with<T>(f: impl FnOnce(&mut State) -> T) -> Option<T> {
     let _c = crate::util::stall::Crumb::new("waiting for Link's state");
     let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
-    g.as_mut().map(f)
+    let t = Instant::now();
+    let r = g.as_mut().map(f);
+    drop(g);
+    held_for(t);
+    r
+}
+
+/// Link's state was held from `t` until now: say so if that was long
+/// (everything else that needs it waited that long).
+fn held_for(t: Instant) {
+    let ms = t.elapsed().as_millis();
+    if ms >= 250 {
+        crate::util::log(&format!("link: state held for {ms} ms by {:?}", std::thread::current().name().unwrap_or("?")));
+    }
+}
+
+/// `with` for the window's thread: if the state is busy for more than a
+/// moment, give up (None) rather than hold up the island — it draws again
+/// soon enough.
+/// Err(()): busy. Ok(None): Link is off.
+fn with_soon<T>(f: impl FnOnce(&mut State) -> T) -> Result<Option<T>, ()> {
+    let start = Instant::now();
+    loop {
+        match ST.try_lock() {
+            Ok(mut g) => return Ok(g.as_mut().map(f)),
+            Err(std::sync::TryLockError::Poisoned(e)) => return Ok(e.into_inner().as_mut().map(f)),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if start.elapsed() > Duration::from_millis(40) {
+                    return Err(());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
 }
 
 /// Run `f`; a panic in it is logged instead of taking the app down.
@@ -331,7 +369,9 @@ pub struct View {
 }
 
 pub fn view() -> Option<View> {
-    let mut v = with(|s| {
+    // (What was drawn last, for the rare moment the state is busy.)
+    static LAST: Mutex<Option<View>> = Mutex::new(None);
+    let got = with_soon(|s| {
         let paired_ids: Vec<u64> = s.paired.iter().map(|p| p.id).collect();
         View {
             me: s.me,
@@ -339,7 +379,7 @@ pub fn view() -> Option<View> {
             nearby: s.peers.iter().filter(|p| !paired_ids.contains(&p.id) && p.seen.elapsed() < Duration::from_secs(10)).map(|p| (p.id, p.name.clone())).collect(),
             paired: s.paired.iter().map(|p| (p.id, p.name.clone())).collect(),
             pairing: s.pairing.clone(),
-            session: s.session.as_ref().map(|x| (x.name.clone(), x.delay())),
+            session: s.session.as_ref().filter(|x| x.live).map(|x| (x.name.clone(), x.delay())),
             geo: build_geo(s),
             pointer: None,
             problem: s.problem.clone(),
@@ -352,7 +392,16 @@ pub fn view() -> Option<View> {
             remote_shelf: if s.session.is_some() { s.remote_shelf.clone() } else { vec![] },
             have: s.have.clone(),
         }
-    })?;
+    });
+    let mut v = match got {
+        Ok(v) => {
+            if let Ok(mut l) = LAST.lock() {
+                *l = v.clone();
+            }
+            v?
+        }
+        Err(()) => LAST.lock().ok().and_then(|l| l.clone())?,
+    };
     v.pointer = match input::captured() {
         Some((_, p)) => Some((p, true)),
         None => {
@@ -748,13 +797,22 @@ fn computer_name() -> String {
 /// Start Link (Settings → General → Link is on). `msg` reaches `host` when
 /// the page should redraw (and to show a pairing request).
 pub fn start(host: isize, msg: u32) {
-    input::show_pointer_now();
+    if with(|s| s.started).unwrap_or(false) {
+        return;
+    }
+    forget_failures();
+    // (In case the app stopped while the pointer was hidden. Off this thread:
+    // Windows reloads every pointer for it.)
+    let _ = std::thread::Builder::new().name("link-pointer".into()).spawn(input::show_pointer_now);
+    // Reading the saved pairings and asking Windows about the screens can
+    // take a moment: before the state is taken, not while it's held.
+    let (me, paired, layout, manual) = load();
+    let screens = local_screens();
     let fresh = {
         let mut g = ST.lock().unwrap_or_else(|e| e.into_inner());
         if g.as_ref().map(|s| s.started).unwrap_or(false) {
             return;
         }
-        let (me, paired, layout, manual) = load();
         let s = State {
             me,
             name: computer_name(),
@@ -764,12 +822,12 @@ pub fn start(host: isize, msg: u32) {
             decide: None,
             session: None,
             layout,
-            local: local_screens(),
+            local: screens,
             started: true,
             host,
             msg,
             problem: String::new(),
-            hold: false,
+            hold: std::env::var("ISLET_LINK_HOLD").is_ok(), // (developer aid: start as if Disconnect was pressed)
             quiet: false,
             manual,
             xfer: None,
@@ -1079,7 +1137,7 @@ fn discover(gen: u64) {
                     let paired = s.paired.iter().any(|p| p.id == id);
                     // The PC with the smaller id calls; the other calls now and then too,
                     // in case the first call can't get in.
-                    (new, paired && s.session.is_none() && !s.hold && !s.quiet && (me < id || rand_bit()))
+                    (new, paired && s.session.is_none() && !s.hold && !s.quiet && may_link() && (me < id || rand_bit()))
                 })
                 .unwrap_or((false, false));
                 if new {
@@ -1185,6 +1243,42 @@ fn rand_bit() -> bool {
 
 static CONNECTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+// A link that ends as soon as it starts (the other PC hangs up at once, or
+// the network drops it) must not be tried again right away, over and over:
+// each try used to set up and tear down the whole session — mouse and
+// keyboard hooks included — about once a second, for as long as it went on.
+/// Links in a row that ended within seconds.
+static QUICK_ENDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// No new link before this moment.
+static NOT_BEFORE: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn may_link() -> bool {
+    let t = *NOT_BEFORE.lock().unwrap_or_else(|e| e.into_inner());
+    t.map(|t| Instant::now() >= t).unwrap_or(true)
+}
+
+/// You asked for it (Connect, an address, Link switched on): try at once.
+fn forget_failures() {
+    QUICK_ENDS.store(0, std::sync::atomic::Ordering::SeqCst);
+    *NOT_BEFORE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// A link ended after `lasted`: wait longer and longer while they keep
+/// ending at once (1, 4, 8, 16, 32, then 60 s). Returns the wait, if any.
+fn link_ended(lasted: Duration, on_purpose: bool) -> Option<u64> {
+    if on_purpose || lasted >= Duration::from_secs(10) {
+        forget_failures();
+        return None;
+    }
+    // (The first one is often just both PCs calling each other at the same
+    // moment: a second or so, not the same on both, and try again.)
+    let n = QUICK_ENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst).min(5);
+    let wait = [1u64, 4, 8, 16, 32, 60][n as usize];
+    let extra = if n == 0 { proto::random::<1>()[0] as u64 * 4 } else { 0 };
+    *NOT_BEFORE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now() + Duration::from_millis(wait * 1000 + extra));
+    Some(wait)
+}
+
 fn connect_to(addr: SocketAddr) {
     if CONNECTING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
@@ -1223,6 +1317,7 @@ fn manual_addr() -> Option<SocketAddr> {
 
 /// Connect by address: call it (paired), or ask to pair.
 pub fn connect_address(text: &str) {
+    forget_failures();
     with(|s| {
         s.manual = text.trim().to_string();
         s.hold = false;
@@ -1260,6 +1355,7 @@ pub fn disconnect() {
 
 /// "Connect": call the paired PC again.
 pub fn reconnect() {
+    forget_failures();
     let target = with(|s| {
         s.hold = false;
         s.quiet = false;
@@ -1535,10 +1631,11 @@ fn run_session(stream: TcpStream, id: u64, name: String, mut tx_c: proto::Cipher
     let remote = stream.peer_addr().ok();
     // One link at a time (and none while you've said Disconnect).
     let ok = with(|s| {
-        if s.session.is_some() || s.hold || !s.started {
+        // (ISLET_LINK_REFUSE: developer aid — take every call and hang up.)
+        if s.session.is_some() || s.hold || !s.started || !may_link() || std::env::var("ISLET_LINK_REFUSE").is_ok() {
             return false;
         }
-        s.session = Some(Session { id, name: name.clone(), screens: vec![], rtt: VecDeque::new(), tx: tx.clone(), remote, call });
+        s.session = Some(Session { id, name: name.clone(), screens: vec![], rtt: VecDeque::new(), tx: tx.clone(), remote, call, live: false });
         s.quiet = false;
         s.remote_shelf.clear();
         if let Some(p) = s.paired.iter_mut().find(|p| p.id == id) {
@@ -1562,14 +1659,12 @@ fn run_session(stream: TcpStream, id: u64, name: String, mut tx_c: proto::Cipher
         drop(tx_c);
         return;
     }
-    LINKED.store(true, std::sync::atomic::Ordering::SeqCst);
-    crate::util::log(&format!("link: connected to {name}"));
+    let began = Instant::now();
     let _ = stream.set_read_timeout(Some(Duration::from_secs(6)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(6)));
     let mut writer = match stream.try_clone() {
         Ok(w) => w,
         Err(_) => {
-            LINKED.store(false, std::sync::atomic::Ordering::SeqCst);
             with(|s| s.session = None);
             return;
         }
@@ -1597,9 +1692,6 @@ fn run_session(stream: TcpStream, id: u64, name: String, mut tx_c: proto::Cipher
     }
     let _ = tx.send(clip::shelf_list());
     clip::send_shelf_hashes();
-    input::start(tx.clone());
-    push_geo();
-    tell_ui();
     // Pings: a few a second while the pointer is over there (also the watchdog).
     let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let last_pong = std::sync::Arc::new(Mutex::new(Instant::now()));
@@ -1623,17 +1715,36 @@ fn run_session(stream: TcpStream, id: u64, name: String, mut tx_c: proto::Cipher
     let mut reader = stream;
     let mut rx_c = rx_c;
     let mut said_bye = false;
+    // The link counts — "Connected", the mouse and keyboard watched for the
+    // edge — only once the other PC has really said something. One that
+    // takes the call and hangs up at once (it's linked already, or busy)
+    // then costs nothing here.
+    let mut live = false;
+    let mut why = String::new();
     loop {
         let m = match proto::read_sealed(&mut reader, &mut rx_c) {
             Ok(m) => m,
             Err(e) => {
-                crate::util::log(&format!("link: {name}: {e}"));
+                why = e.to_string();
                 break;
             }
         };
         if m == Msg::Bye {
             said_bye = true;
             break;
+        }
+        if !live {
+            live = true;
+            with(|s| {
+                if let Some(x) = s.session.as_mut() {
+                    x.live = true;
+                }
+            });
+            LINKED.store(true, std::sync::atomic::Ordering::SeqCst);
+            crate::util::log(&format!("link: connected to {name}"));
+            input::start(tx.clone());
+            push_geo();
+            tell_ui();
         }
         // The other PC's pointer, buttons and keys are played on a thread of
         // their own (so a slow app never holds up the link), in order.
@@ -1650,8 +1761,12 @@ fn run_session(stream: TcpStream, id: u64, name: String, mut tx_c: proto::Cipher
     if let Some(w) = w {
         let _ = w.join();
     }
-    input::stop();
+    if live {
+        input::stop();
+    }
     LINKED.store(false, std::sync::atomic::Ordering::SeqCst);
+    let ours = with(|s| s.hold || !s.started).unwrap_or(true);
+    let wait = link_ended(began.elapsed(), said_bye || ours);
     with(|s| {
         s.session = None;
         s.remote_shelf.clear();
@@ -1662,8 +1777,16 @@ fn run_session(stream: TcpStream, id: u64, name: String, mut tx_c: proto::Cipher
             s.quiet = true;
         }
     });
-    push_geo();
-    crate::util::log(&format!("link: {name} disconnected"));
+    if live {
+        push_geo();
+    }
+    let why = if why.is_empty() { String::new() } else { format!(" ({why})") };
+    let again = wait.map(|w| format!(" — next try in {w} s")).unwrap_or_default();
+    if live {
+        crate::util::log(&format!("link: {name} disconnected{why}{again}"));
+    } else {
+        crate::util::log(&format!("link: {name} took the call and hung up{why}{again}"));
+    }
     tell_ui();
 }
 

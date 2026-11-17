@@ -56,6 +56,96 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// For the hooks: the lock if it's free right now, else None — a hook never
+/// waits (every mouse and key event of the whole desktop passes through it).
+fn soon<T>(m: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match m.try_lock() {
+        Ok(g) => Some(g),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The hooks must never hold Windows up
+// ---------------------------------------------------------------------------
+
+/// When the hook now running was entered (GetTickCount64; 0 = none is).
+static IN_HOOK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The two hooks (mouse, keyboard), for taking them off from another thread.
+static HOOKS: Mutex<(isize, isize)> = Mutex::new((0, 0));
+/// Slow hook calls seen (and when one was last written to the log).
+static SLOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static SLOW_SAID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn tick() -> u64 {
+    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }.max(1)
+}
+
+/// Run a hook's work, timed.
+fn timed(what: &str, f: impl FnOnce() -> Option<LRESULT>) -> Option<LRESULT> {
+    let t = tick();
+    IN_HOOK.store(t, Ordering::SeqCst);
+    // (ISLET_HOOK_STALL=ms: developer aid — one hook call that gets stuck.)
+    static STALL: std::sync::Once = std::sync::Once::new();
+    if what == "mouse" {
+        STALL.call_once(|| {
+            if let Some(ms) = std::env::var("ISLET_HOOK_STALL").ok().and_then(|v| v.parse::<u64>().ok()) {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+        });
+    }
+    let r = guarded(f);
+    IN_HOOK.store(0, Ordering::SeqCst);
+    let took = tick().saturating_sub(t);
+    if took >= 60 {
+        let n = SLOW.fetch_add(1, Ordering::Relaxed) + 1;
+        let now = tick();
+        if now.saturating_sub(SLOW_SAID.load(Ordering::Relaxed)) > 10_000 {
+            SLOW_SAID.store(now, Ordering::Relaxed);
+            crate::util::log(&format!("link: the {what} hook took {took} ms ({n} slow so far)"));
+        }
+    }
+    r
+}
+
+fn unhook_all() -> bool {
+    let (m, k) = std::mem::take(&mut *lock(&HOOKS));
+    unsafe {
+        if m != 0 {
+            let _ = UnhookWindowsHookEx(HHOOK(m as *mut _));
+        }
+        if k != 0 {
+            let _ = UnhookWindowsHookEx(HHOOK(k as *mut _));
+        }
+    }
+    m != 0 || k != 0
+}
+
+/// A thread that takes the hooks off if one ever stops answering: a stuck
+/// low-level hook holds up the mouse and keyboard of the whole desktop —
+/// the taskbar and every app with it — until Windows gives up on it, event
+/// after event. Sharing the mouse then stops until Link is switched off and
+/// on, which is the lesser evil by far.
+fn watch_hooks() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = std::thread::Builder::new().name("link-hook-watch".into()).spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let t = IN_HOOK.load(Ordering::SeqCst);
+            if t != 0 && tick().saturating_sub(t) > 400 && unhook_all() {
+                crate::util::log("link: the mouse/keyboard hook stopped answering — taken off so it can't hold up Windows (switch Link off and on to share the mouse again)");
+                // The pointer back here and visible, if it was over there
+                // (on a thread of its own, in case that is what's stuck).
+                let _ = std::thread::Builder::new().name("link-hook-home".into()).spawn(|| {
+                    come_home(None, true);
+                    show_pointer();
+                });
+            }
+        });
+    });
+}
+
 pub fn set_geo(g: Geo) {
     *lock(&GEO) = Some(Arc::new(g));
 }
@@ -85,6 +175,7 @@ pub fn captured() -> Option<(usize, (f32, f32))> {
 /// Start watching (a session began): input goes to `tx` while the pointer is over there.
 pub fn start(tx: Sender<Msg>) {
     *lock(&OUT) = Some(tx);
+    watch_hooks();
     if THREAD.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -98,6 +189,8 @@ pub fn start(tx: Sender<Msg>) {
         if m.is_err() || k.is_err() {
             crate::util::log("link: couldn't watch the mouse / keyboard");
         }
+        *lock(&HOOKS) = (m.as_ref().map(|h| h.0 as isize).unwrap_or(0), k.as_ref().map(|h| h.0 as isize).unwrap_or(0));
+        IN_HOOK.store(0, Ordering::SeqCst);
         THREAD.store(windows::Win32::System::Threading::GetCurrentThreadId(), Ordering::SeqCst);
         make_catcher();
         let _ = ready_tx.send(());
@@ -110,12 +203,8 @@ pub fn start(tx: Sender<Msg>) {
         if cw != 0 {
             let _ = DestroyWindow(HWND(cw as *mut _));
         }
-        if let Ok(h) = m {
-            let _ = UnhookWindowsHookEx(h);
-        }
-        if let Ok(h) = k {
-            let _ = UnhookWindowsHookEx(h);
-        }
+        // (Unless the watcher already took them off.)
+        unhook_all();
         let me = windows::Win32::System::Threading::GetCurrentThreadId();
         let _ = THREAD.compare_exchange(me, 0, Ordering::SeqCst, Ordering::SeqCst);
     });
@@ -274,7 +363,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESU
     if code != HC_ACTION as i32 {
         return CallNextHookEx(None, code, wp, lp);
     }
-    match guarded(|| mouse_inner(code, wp, lp)) {
+    match timed("mouse", || mouse_inner(code, wp, lp)) {
         Some(r) => r,
         None => CallNextHookEx(None, code, wp, lp),
     }
@@ -295,8 +384,9 @@ unsafe fn mouse_inner(code: i32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
     }
     let pt = (info.pt.x, info.pt.y);
     let msg = wp.0 as u32;
-    let geo = lock(&GEO).clone()?;
-    let mut cap = lock(&CAP);
+    // (Busy for an instant? Let this one event through rather than wait.)
+    let geo = soon(&GEO)?.clone()?;
+    let mut cap = soon(&CAP)?;
     if cap.on {
         match msg {
             WM_MOUSEMOVE => {
@@ -364,7 +454,7 @@ unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if code != HC_ACTION as i32 {
         return CallNextHookEx(None, code, wp, lp);
     }
-    match guarded(|| key_inner(lp)) {
+    match timed("keyboard", || key_inner(lp)) {
         Some(r) => r,
         None => CallNextHookEx(None, code, wp, lp),
     }
@@ -379,7 +469,7 @@ unsafe fn key_inner(lp: LPARAM) -> Option<LRESULT> {
         send(Msg::Take);
         notify();
     }
-    if !lock(&CAP).on {
+    if !soon(&CAP).map(|c| c.on).unwrap_or(false) {
         return None;
     }
     let up = info.flags.0 & LLKHF_UP.0 != 0;

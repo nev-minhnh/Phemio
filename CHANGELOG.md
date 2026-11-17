@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.38.2
+
+- **Link can no longer hold up the rest of Windows.** While two PCs are linked, Phemio watches the
+  mouse and keyboard to know when the pointer crosses over — and Windows waits for that watcher on
+  every single movement and key, for the taskbar and every app. It now never waits for anything
+  itself (a busy moment lets the event through instead), and if it ever does stop answering, a
+  guard takes it off within half a second and says so in `phemio.log`, instead of the taskbar and
+  everything else freezing with it.
+- **A link that drops straight away is no longer retried every second.** When the other PC took the
+  call and hung up at once, or the connection broke right after it was made, Phemio called again
+  immediately, set everything up again — the mouse and keyboard watcher included — and tore it
+  down again, hundreds of times in a few minutes. Now the link only counts (and the watcher only
+  starts) once the other PC has actually answered, and failed tries wait longer each time: 1, 4, 8,
+  16, 32, then 60 seconds. *Connect* on the Link page tries again at once.
+- The island's window never waits for Link any more: if Link is busy for a moment, it draws what
+  it knew a moment ago. Switching Link on no longer does its slow work (reading the saved
+  pairings, asking Windows about the screens, resetting the pointers) on the window's thread.
+- `phemio.log` now says why a link ended, and notes a slow mouse/keyboard watcher or Link's state
+  being held for long.
+
 ## 0.38.1
 
 - **Link no longer makes the pointer stutter along the screen's edges.** With Link on, every mouse
